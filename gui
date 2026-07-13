@@ -1,59 +1,13 @@
-import static org.testng.Assert.assertNull;
+private br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse filterOnlyScheduledItems(br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse response) {
+    if (response == null || response.getSchedules() == null) {
+        return response;
+    }
 
-@Test
-void executeV3ListSchedulesPaginate_filterOnlyScheduledItemsTest() throws IOException {
-    when(nextPixClient.getV3ListSchedulesPaginated(any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(mockSchedulesForFilter());
-    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(false);
-    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
-    assertNotNull(response);
-    assertEquals(response.getStatusCode(), HttpStatus.OK);
-    assertNotNull(response.getBody());
-    assertNotNull(response.getBody().getSchedules());
-    assertEquals(response.getBody().getSchedules().size(), 1);
-    assertEquals(response.getBody().getSchedules().get(0).getStatus(), ScheduleSituationPixEnum.AGENDADO);
-}
+    response.setSchedules(response.getSchedules().stream()
+            .filter(Objects::nonNull)
+            .filter(schedule -> Objects.nonNull(schedule.getStatus()))
+            .filter(schedule -> br.com.bradesco.next.client.next.pix.schedule.enums.ScheduleSituationPixEnum.AGENDADO.equals(schedule.getStatus()))
+            .collect(Collectors.toList()));
 
-@Test
-void executeV3ListSchedulesPaginateMagic_filterOnlyScheduledItemsTest() throws IOException {
-    when(nextPixClient.getV3ListSchedulesPaginatedMagic(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(mockSchedulesForFilter());
-    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(true);
-    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
-    assertNotNull(response);
-    assertEquals(response.getStatusCode(), HttpStatus.OK);
-    assertNotNull(response.getBody());
-    assertNotNull(response.getBody().getSchedules());
-    assertEquals(response.getBody().getSchedules().size(), 1);
-    assertEquals(response.getBody().getSchedules().get(0).getStatus(), ScheduleSituationPixEnum.AGENDADO);
-}
-
-@Test
-void executeV3ListSchedulesPaginate_nullSchedulesTest() throws IOException {
-    when(nextPixClient.getV3ListSchedulesPaginated(any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(mockWithNullSchedules());
-    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(false);
-    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
-    assertNotNull(response);
-    assertEquals(response.getStatusCode(), HttpStatus.OK);
-    assertNotNull(response.getBody());
-    assertNotNull(response.getBody().getSchedules());
-    assertEquals(response.getBody().getSchedules().size(), 0);
-}
-
-@Test
-void executeV3ListSchedulesPaginate_nullResponseTest() throws IOException {
-    when(nextPixClient.getV3ListSchedulesPaginated(any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(null);
-    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(false);
-    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
-    assertNotNull(response);
-    assertEquals(response.getStatusCode(), HttpStatus.OK);
-    assertNull(response.getBody());
-}
-
-private br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse mockSchedulesForFilter() throws IOException {
-    String json = "{\"schedules\":[null,{\"status\":null},{\"status\":\"CANCELADO\",\"cancellationReason\":\"CANCELADO_SALDO_INSUFICIENTE\"},{\"status\":\"AGENDADO\"}]}";
-    return JsonUtils.readValue(json, br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse.class);
-}
-
-private br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse mockWithNullSchedules() throws IOException {
-    String json = "{\"schedules\":null}";
-    return JsonUtils.readValue(json, br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse.class);
+    return response;
 }
