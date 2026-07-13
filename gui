@@ -1,150 +1,59 @@
-correção deve ficar no fluxo novo, dentro do PixRedundanceService.executeV3ListSchedulesPaginate(), logo após converter a resposta do nextPixClient para PixScheduleResponse.
+import static org.testng.Assert.assertNull;
 
-Assim, o controller e o serviço legado continuam intactos.
-
-1. Altere este trecho
-
-Hoje está assim:
-
-String responseBefore = JsonUtils.writeValueAsString(response);
-responseData = JsonUtils.readValue(responseBefore, PixScheduleResponse.class);
-
-Deixe assim:
-
-String responseBefore = JsonUtils.writeValueAsString(response);
-
-responseData = JsonUtils.readValue(
-        responseBefore,
-        PixScheduleResponse.class
-);
-
-responseData = filterOnlyScheduledItems(responseData);
-2. Adicione este método no PixRedundanceService
-private PixScheduleResponse filterOnlyScheduledItems(
-        PixScheduleResponse response) {
-
-    if (response == null) {
-        return null;
-    }
-
-    if (response.getSchedules() == null) {
-        response.setSchedules(Collections.emptyList());
-        return response;
-    }
-
-    List<PixScheduleDto> scheduledItems = response.getSchedules()
-            .stream()
-            .filter(Objects::nonNull)
-            .filter(schedule -> Objects.nonNull(schedule.getStatus()))
-            .filter(schedule ->
-                    ScheduleSituationPixEnum.AGENDADO.equals(
-                            schedule.getStatus()
-                    )
-            )
-            .collect(Collectors.toList());
-
-    response.setSchedules(scheduledItems);
-
-    return response;
-}
-3. Imports necessários
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
-import java.util.stream.Collectors;
-
-Além dos imports das suas classes:
-
-import br.com.bradesco.next.pix.schedule.domain.dto.PixScheduleDto;
-import br.com.bradesco.next.pix.schedule.domain.enums.ScheduleSituationPixEnum;
-
-Ajuste somente os pacotes conforme estiverem no seu projeto.
-
-Como fica o método completo
-public ResponseEntity<PixScheduleResponse> executeV3ListSchedulesPaginate(
-        V3ListSchedulesPaginatedDto dto) {
-
-    PixScheduleResponse responseData;
-
-    try {
-        br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse response;
-
-        if (dto.isMagic()) {
-            response = nextPixClient.getV3ListSchedulesPaginatedMagic(
-                    dto.getToken(),
-                    dto.getStartDate(),
-                    dto.getEndDate(),
-                    "AMBOS",
-                    dto.getLastRecordDate(),
-                    dto.getE2eLastRecord(),
-                    dto.getMinimumValue(),
-                    dto.getMaximumValue()
-            );
-        } else {
-            response = nextPixClient.getV3ListSchedulesPaginated(
-                    dto.getToken(),
-                    dto.getStartDate(),
-                    dto.getEndDate(),
-                    "AMBOS",
-                    dto.getLastRecordDate(),
-                    dto.getE2eLastRecord(),
-                    dto.getMinimumValue(),
-                    dto.getMaximumValue(),
-                    dto.getPixScheduleListTypeEnum() == null
-                            ? PixScheduleListTypeEnum.ALL.name()
-                            : dto.getPixScheduleListTypeEnum().name()
-            );
-        }
-
-        String responseBefore = JsonUtils.writeValueAsString(response);
-
-        responseData = JsonUtils.readValue(
-                responseBefore,
-                PixScheduleResponse.class
-        );
-
-        responseData = filterOnlyScheduledItems(responseData);
-
-    } catch (FeignException e) {
-        NextError nextError = getError(e.getMessage(), e);
-
-        LOG.error(
-                String.format("%s%s", ERROR_SCHEDULE, e.getMessage())
-        );
-
-        PixScheduleResponse responseServ = new PixScheduleResponse();
-        responseServ.setCode(nextError.getCode());
-        responseServ.addMessage(nextError.getMessageKey());
-
-        return new ResponseEntity<>(
-                responseServ,
-                HttpStatus.valueOf(e.status())
-        );
-
-    } catch (IOException e) {
-        PixScheduleResponse error = new PixScheduleResponse();
-        error.setCode("NEXT.PIX.GENERAL.001");
-        error.addMessage("Error to parse response from Next-Pix");
-
-        return new ResponseEntity<>(
-                error,
-                HttpStatus.UNPROCESSABLE_ENTITY
-        );
-    }
-
-    return ResponseEntity.ok(responseData);
+@Test
+void executeV3ListSchedulesPaginate_filterOnlyScheduledItemsTest() throws IOException {
+    when(nextPixClient.getV3ListSchedulesPaginated(any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(mockSchedulesForFilter());
+    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(false);
+    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
+    assertNotNull(response);
+    assertEquals(response.getStatusCode(), HttpStatus.OK);
+    assertNotNull(response.getBody());
+    assertNotNull(response.getBody().getSchedules());
+    assertEquals(response.getBody().getSchedules().size(), 1);
+    assertEquals(response.getBody().getSchedules().get(0).getStatus(), ScheduleSituationPixEnum.AGENDADO);
 }
 
-Pelo mapper mostrado nas fotos, o status do PixScheduleDto é um ScheduleSituationPixEnum, então a comparação correta é:
+@Test
+void executeV3ListSchedulesPaginateMagic_filterOnlyScheduledItemsTest() throws IOException {
+    when(nextPixClient.getV3ListSchedulesPaginatedMagic(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(mockSchedulesForFilter());
+    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(true);
+    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
+    assertNotNull(response);
+    assertEquals(response.getStatusCode(), HttpStatus.OK);
+    assertNotNull(response.getBody());
+    assertNotNull(response.getBody().getSchedules());
+    assertEquals(response.getBody().getSchedules().size(), 1);
+    assertEquals(response.getBody().getSchedules().get(0).getStatus(), ScheduleSituationPixEnum.AGENDADO);
+}
 
-ScheduleSituationPixEnum.AGENDADO.equals(schedule.getStatus())
+@Test
+void executeV3ListSchedulesPaginate_nullSchedulesTest() throws IOException {
+    when(nextPixClient.getV3ListSchedulesPaginated(any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(mockWithNullSchedules());
+    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(false);
+    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
+    assertNotNull(response);
+    assertEquals(response.getStatusCode(), HttpStatus.OK);
+    assertNotNull(response.getBody());
+    assertNotNull(response.getBody().getSchedules());
+    assertEquals(response.getBody().getSchedules().size(), 0);
+}
 
-Com isso:
+@Test
+void executeV3ListSchedulesPaginate_nullResponseTest() throws IOException {
+    when(nextPixClient.getV3ListSchedulesPaginated(any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(null);
+    V3ListSchedulesPaginatedDto dto = buildListScheduleDto(false);
+    ResponseEntity<PixScheduleResponse> response = pixRedundanceService.executeV3ListSchedulesPaginate(dto);
+    assertNotNull(response);
+    assertEquals(response.getStatusCode(), HttpStatus.OK);
+    assertNull(response.getBody());
+}
 
-AGENDADO permanece na lista;
-cancelado ou excluído não aparece;
-status null também não aparece;
-o fluxo legado não é alterado;
-a validação também funciona no endpoint normal e no endpoint Magic, porque ambos passam pelo mesmo método do PixRedundanceService.
+private br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse mockSchedulesForFilter() throws IOException {
+    String json = "{\"schedules\":[null,{\"status\":null},{\"status\":\"CANCELADO\",\"cancellationReason\":\"CANCELADO_SALDO_INSUFICIENTE\"},{\"status\":\"AGENDADO\"}]}";
+    return JsonUtils.readValue(json, br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse.class);
+}
 
-Não alterei o totalRecords, pois o endpoint é paginado. Substituí-lo pelo tamanho da página filtrada poderia deixar a paginação incorreta.
+private br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse mockWithNullSchedules() throws IOException {
+    String json = "{\"schedules\":null}";
+    return JsonUtils.readValue(json, br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse.class);
+}
