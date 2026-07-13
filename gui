@@ -1,35 +1,54 @@
-package br.com.bradesco.next.pix.schedule.util;
+import org.junit.jupiter.api.Test;
 
-public final class ConversionHelper {
+import static org.junit.jupiter.api.Assertions.*;
 
-    private ConversionHelper() {
-        throw new IllegalStateException("Classe utilitária não pode ser instanciada");
+class ConversionHelperTest {
+
+    @Test
+    void shouldConvertStringToInteger() {
+        Integer result = ConversionHelper.toIntegerOrNull("10");
+
+        assertEquals(10, result);
     }
 
-    public static Integer toIntegerOrNull(String value) {
-        return toIntegerOrNull(value, "valor");
+    @Test
+    void shouldTrimAndConvertStringToInteger() {
+        Integer result = ConversionHelper.toIntegerOrNull(" 10 ");
+
+        assertEquals(10, result);
     }
 
-    public static Integer toIntegerOrNull(String value, String fieldName) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-
-        try {
-            return Integer.valueOf(value.trim());
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "O campo '%s' deve possuir um valor numérico. Valor recebido: '%s'",
-                            fieldName,
-                            value
-                    ),
-                    exception
-            );
-        }
+    @Test
+    void shouldReturnNullWhenValueIsNull() {
+        assertNull(ConversionHelper.toIntegerOrNull(null));
     }
 
-    public static String toStringOrNull(Integer value) {
-        return value == null ? null : value.toString();
+    @Test
+    void shouldReturnNullWhenValueIsBlank() {
+        assertNull(ConversionHelper.toIntegerOrNull("   "));
+    }
+
+    @Test
+    void shouldThrowExceptionWhenValueIsNotNumeric() {
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> ConversionHelper.toIntegerOrNull(
+                        "ABC",
+                        "accountPlusDigit"
+                )
+        );
+
+        assertTrue(exception.getMessage().contains("accountPlusDigit"));
+        assertTrue(exception.getMessage().contains("ABC"));
+    }
+
+    @Test
+    void shouldConvertIntegerToString() {
+        assertEquals("10", ConversionHelper.toStringOrNull(10));
+    }
+
+    @Test
+    void shouldReturnNullWhenIntegerIsNull() {
+        assertNull(ConversionHelper.toStringOrNull(null));
     }
 }
