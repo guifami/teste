@@ -1,13 +1,7 @@
-private br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse filterOnlyScheduledItems(br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse response) {
+private void filterOnlyScheduledItems(PixScheduleResponse response) {
     if (response == null || response.getSchedules() == null) {
-        return response;
+        return;
     }
 
-    response.setSchedules(response.getSchedules().stream()
-            .filter(Objects::nonNull)
-            .filter(schedule -> Objects.nonNull(schedule.getStatus()))
-            .filter(schedule -> br.com.bradesco.next.client.next.pix.schedule.enums.ScheduleSituationPixEnum.AGENDADO.equals(schedule.getStatus()))
-            .collect(Collectors.toList()));
-
-    return response;
+    response.getSchedules().removeIf(schedule -> schedule == null || schedule.getStatus() != ScheduleSituationPixEnum.AGENDADO);
 }
