@@ -1,7 +1,163 @@
+Ficou funcional, mas eu faria dois ajustes importantes:
+
+schedule.getStatus().name() pode lançar NullPointerException quando o status vier nulo.
+Como o retorno é Optional, fica mais limpo usar ifPresent() em vez de orElse(null).
+Ajuste recomendado
+var v3ListSchedulesPaginated = service.getV3ListSchedulesPaginated(requestDto);
+
+v3ListSchedulesPaginated.ifPresent(this::filterOnlyScheduledItems);
+
+return v3ListSchedulesPaginated
+        .map(ResponseEntity::ok)
+        .orElseGet(() -> noContent().build());
+
+E altere o filtro para:
+
 private void filterOnlyScheduledItems(PixScheduleResponse response) {
     if (response == null || response.getSchedules() == null) {
         return;
     }
 
-    response.getSchedules().removeIf(schedule -> schedule == null || schedule.getStatus() != ScheduleSituationPixEnum.AGENDADO);
+    response.setSchedules(
+            response.getSchedules()
+                    .stream()
+                    .filter(Objects::nonNull)
+                    .filter(schedule ->
+                            ScheduleSituationPixEnum.AGENDADO.equals(schedule.getStatus()))
+                    .collect(Collectors.toList())
+    );
 }
+
+Imports:
+
+import java.util.Objects;
+import java.util.stream.Collectors;
+
+Essa versão também funciona caso a lista original seja imutável, situação em que o seu removeIf() poderia lançar UnsupportedOperationException.
+
+Testes unitários para o filtro
+
+Como o método está private, estes testes usam ReflectionTestUtils. Pode colocá-los dentro do seu PixScheduleControllerTest, utilizando a instância controller que você já possui no teste.
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
+
+@Test
+void shouldKeepOnlyScheduledItems() {
+    PixScheduleDto scheduled = createSchedule(ScheduleSituationPixEnum.AGENDADO);
+    PixScheduleDto notScheduled = createSchedule(getStatusDifferentFromScheduled());
+    PixScheduleDto withoutStatus = createSchedule(null);
+
+    PixScheduleResponse response = new PixScheduleResponse();
+    response.setSchedules(
+            new ArrayList<>(
+                    Arrays.asList(
+                            scheduled,
+                            notScheduled,
+                            withoutStatus,
+                            null
+                    )
+            )
+    );
+
+    ReflectionTestUtils.invokeMethod(
+            controller,
+            "filterOnlyScheduledItems",
+            response
+    );
+
+    assertNotNull(response.getSchedules());
+    assertEquals(1, response.getSchedules().size());
+    assertSame(scheduled, response.getSchedules().get(0));
+}
+
+@Test
+void shouldReturnEmptyListWhenThereAreNoScheduledItems() {
+    PixScheduleDto notScheduled = createSchedule(getStatusDifferentFromScheduled());
+    PixScheduleDto withoutStatus = createSchedule(null);
+
+    PixScheduleResponse response = new PixScheduleResponse();
+    response.setSchedules(
+            new ArrayList<>(
+                    Arrays.asList(
+                            notScheduled,
+                            withoutStatus,
+                            null
+                    )
+            )
+    );
+
+    ReflectionTestUtils.invokeMethod(
+            controller,
+            "filterOnlyScheduledItems",
+            response
+    );
+
+    assertNotNull(response.getSchedules());
+    assertEquals(0, response.getSchedules().size());
+}
+
+@Test
+void shouldDoNothingWhenSchedulesIsNull() {
+    PixScheduleResponse response = new PixScheduleResponse();
+    response.setSchedules(null);
+
+    assertDoesNotThrow(() ->
+            ReflectionTestUtils.invokeMethod(
+                    controller,
+                    "filterOnlyScheduledItems",
+                    response
+            )
+    );
+
+    assertNull(response.getSchedules());
+}
+
+@Test
+void shouldDoNothingWhenResponseIsNull() {
+    assertDoesNotThrow(() ->
+            ReflectionTestUtils.invokeMethod(
+                    controller,
+                    "filterOnlyScheduledItems",
+                    new Object[]{null}
+            )
+    );
+}
+
+private PixScheduleDto createSchedule(ScheduleSituationPixEnum status) {
+    PixScheduleDto schedule = new PixScheduleDto();
+    schedule.setStatus(status);
+    return schedule;
+}
+
+private ScheduleSituationPixEnum getStatusDifferentFromScheduled() {
+    return Arrays.stream(ScheduleSituationPixEnum.values())
+            .filter(status -> status != ScheduleSituationPixEnum.AGENDADO)
+            .findFirst()
+            .orElseThrow(() ->
+                    new IllegalStateException(
+                            "O enum precisa possuir algum status diferente de AGENDADO"
+                    )
+            );
+}
+
+Esses testes cobrem:
+
+item com status AGENDADO;
+item com outro status;
+item com status nulo;
+item nulo dentro da lista;
+lista nula;
+response nulo;
+situação em que todos os registros são removidos.
+
+Só existe um ponto arquitetural para observar: como o filtro acontece depois da paginação, totalRecords, nextPage e a quantidade de itens por página podem continuar considerando registros cancelados ou excluídos. Quando o client permitir, o ideal é enviar o status AGENDADO para o serviço de origem e filtrar antes de paginar.
