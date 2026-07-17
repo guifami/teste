@@ -1,163 +1,131 @@
-Ficou funcional, mas eu faria dois ajustes importantes:
 
-schedule.getStatus().name() pode lançar NullPointerException quando o status vier nulo.
-Como o retorno é Optional, fica mais limpo usar ifPresent() em vez de orElse(null).
-Ajuste recomendado
-var v3ListSchedulesPaginated = service.getV3ListSchedulesPaginated(requestDto);
+1000199673.jpg
+1000199672.jpg
+1000199670.jpg
+1000199671.jpg
+1000199669.jpg
+1000199668.jpg
+1000199667.jpg
+1000199666.jpg
+1000199665.jpg
+1000199664.jpg
+1000199663.jpg
+1000199662.jpg
+1000199661.jpg
+1000199660.jpg
+corrija pra mim esse erro. o caio mandou como esta vindo o request no App
 
-v3ListSchedulesPaginated.ifPresent(this::filterOnlyScheduledItems);
+O request enviado pelo app está correto:
 
-return v3ListSchedulesPaginated
-        .map(ResponseEntity::ok)
-        .orElseGet(() -> noContent().build());
+startDate=2026-07-08
+endDate=2026-07-16
+pageSize=20
+lastRegistryDate=
+O erro acontece dentro do Core, na montagem do ListPaymentReceiptRequestDTO. O BSPI está recebendo como null justamente:
 
-E altere o filtro para:
+dataInicial
+dataFinal
+tamanhoPagina
+No método createBspiListReceiptPaginatedRequest, você precisa copiar esses campos do PixReceiptListV3Request para o DTO enviado ao BSPI.
 
-private void filterOnlyScheduledItems(PixScheduleResponse response) {
-    if (response == null || response.getSchedules() == null) {
-        return;
+Ajuste no PixPaginatorService
+Adicione estas atribuições dentro do método existente:
+
+private static final DateTimeFormatter BSPI_DATE_FORMAT =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd");
+
+private BspiListReceiptPaginatedMapper createBspiListReceiptPaginatedRequest(
+        BspiHeader header,
+        PixReceiptListV3Request request) {
+
+    ListPaymentReceiptRequestDTO requestDTO =
+            new ListPaymentReceiptRequestDTO();
+
+    requestDTO.setAgencia(header.getBranch());
+
+    // Mantenha aqui os outros campos que já são preenchidos,
+    // como conta, canal, CPF/CNPJ etc.
+
+    requestDTO.setDataInicial(formatDate(request.getInitialDate()));
+    requestDTO.setDataFinal(formatDate(request.getFinalDate()));
+    requestDTO.setTamanhoPagina(request.getPageSize());
+
+    if (request.getLastRegistryDate() != null
+            && !request.getLastRegistryDate().trim().isEmpty()) {
+
+        // Mantenha o nome exato do setter existente no DTO.
+        requestDTO.setDataUltimoRegistro(request.getLastRegistryDate());
     }
 
-    response.setSchedules(
-            response.getSchedules()
-                    .stream()
-                    .filter(Objects::nonNull)
-                    .filter(schedule ->
-                            ScheduleSituationPixEnum.AGENDADO.equals(schedule.getStatus()))
-                    .collect(Collectors.toList())
-    );
+    return new BspiListReceiptPaginatedMapper(header, requestDTO);
 }
 
-Imports:
+private String formatDate(LocalDate date) {
+    return date == null ? null : date.format(BSPI_DATE_FORMAT);
+}
+Caso o construtor do seu BspiListReceiptPaginatedMapper seja diferente, mantenha o retorno que já existe no projeto. O essencial é incluir:
 
-import java.util.Objects;
-import java.util.stream.Collectors;
+requestDTO.setDataInicial(formatDate(request.getInitialDate()));
+requestDTO.setDataFinal(formatDate(request.getFinalDate()));
+requestDTO.setTamanhoPagina(request.getPageSize());
+Ajuste adicional no PixMainService
+Como o app manda lastRegistryDate= na primeira página, normalize o valor vazio para null:
 
-Essa versão também funciona caso a lista original seja imutável, situação em que o seu removeIf() poderia lançar UnsupportedOperationException.
+pixReceiptListV3Request.setLastRegistryDate(
+        lastRegistryDate == null || lastRegistryDate.trim().isEmpty()
+                ? null
+                : lastRegistryDate
+);
+O método completo dessa parte fica:
 
-Testes unitários para o filtro
+public PixReceiptResponse getListReceiptsPaginatedV4(
+        Long account,
+        Integer branch,
+        String cpf,
+        Long customerId,
+        String finalDate,
+        String initialDate,
+        String lastRegistryDate,
+        Integer pageSize,
+        boolean isMagic) {
 
-Como o método está private, estes testes usam ReflectionTestUtils. Pode colocá-los dentro do seu PixScheduleControllerTest, utilizando a instância controller que você já possui no teste.
+    PixReceiptListV3Request request = new PixReceiptListV3Request();
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-
-import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
-
-@Test
-void shouldKeepOnlyScheduledItems() {
-    PixScheduleDto scheduled = createSchedule(ScheduleSituationPixEnum.AGENDADO);
-    PixScheduleDto notScheduled = createSchedule(getStatusDifferentFromScheduled());
-    PixScheduleDto withoutStatus = createSchedule(null);
-
-    PixScheduleResponse response = new PixScheduleResponse();
-    response.setSchedules(
-            new ArrayList<>(
-                    Arrays.asList(
-                            scheduled,
-                            notScheduled,
-                            withoutStatus,
-                            null
-                    )
-            )
+    request.setFinalDate(toDate(finalDate));
+    request.setInitialDate(toDate(initialDate));
+    request.setPageSize(pageSize);
+    request.setLastRegistryDate(
+            lastRegistryDate == null || lastRegistryDate.trim().isEmpty()
+                    ? null
+                    : lastRegistryDate
     );
 
-    ReflectionTestUtils.invokeMethod(
-            controller,
-            "filterOnlyScheduledItems",
-            response
+    PixReceiptResponse response = getListReceiptsPaginatedV4(
+            account,
+            branch,
+            cpf,
+            customerId,
+            request
     );
 
-    assertNotNull(response.getSchedules());
-    assertEquals(1, response.getSchedules().size());
-    assertSame(scheduled, response.getSchedules().get(0));
+    if (isMagic
+            && response != null
+            && response.getTransactions() != null) {
+
+        response.getTransactions()
+                .forEach(PixTransactionReceiptDto::convertDateToMagic);
+    }
+
+    return response;
 }
+Controller
+A ordem atual está funcional, mas está confusa porque o controller recebe startDate/endDate e chama o service como endDate/startDate. Para evitar erro futuro, deixaria explícito que o último registro é opcional:
 
-@Test
-void shouldReturnEmptyListWhenThereAreNoScheduledItems() {
-    PixScheduleDto notScheduled = createSchedule(getStatusDifferentFromScheduled());
-    PixScheduleDto withoutStatus = createSchedule(null);
+@RequestParam(value = "startDate") String startDate,
+@RequestParam(value = "endDate") String endDate,
+@RequestParam(value = "lastRegistryDate", required = false) String lastRegistryDate,
+@RequestParam(value = "pageSize", defaultValue = "20") Integer pageSize
+Portanto, não é necessário corrigir o app. O app está enviando os valores; eles estão sendo perdidos na conversão para o ListPaymentReceiptRequestDTO.
 
-    PixScheduleResponse response = new PixScheduleResponse();
-    response.setSchedules(
-            new ArrayList<>(
-                    Arrays.asList(
-                            notScheduled,
-                            withoutStatus,
-                            null
-                    )
-            )
-    );
 
-    ReflectionTestUtils.invokeMethod(
-            controller,
-            "filterOnlyScheduledItems",
-            response
-    );
-
-    assertNotNull(response.getSchedules());
-    assertEquals(0, response.getSchedules().size());
-}
-
-@Test
-void shouldDoNothingWhenSchedulesIsNull() {
-    PixScheduleResponse response = new PixScheduleResponse();
-    response.setSchedules(null);
-
-    assertDoesNotThrow(() ->
-            ReflectionTestUtils.invokeMethod(
-                    controller,
-                    "filterOnlyScheduledItems",
-                    response
-            )
-    );
-
-    assertNull(response.getSchedules());
-}
-
-@Test
-void shouldDoNothingWhenResponseIsNull() {
-    assertDoesNotThrow(() ->
-            ReflectionTestUtils.invokeMethod(
-                    controller,
-                    "filterOnlyScheduledItems",
-                    new Object[]{null}
-            )
-    );
-}
-
-private PixScheduleDto createSchedule(ScheduleSituationPixEnum status) {
-    PixScheduleDto schedule = new PixScheduleDto();
-    schedule.setStatus(status);
-    return schedule;
-}
-
-private ScheduleSituationPixEnum getStatusDifferentFromScheduled() {
-    return Arrays.stream(ScheduleSituationPixEnum.values())
-            .filter(status -> status != ScheduleSituationPixEnum.AGENDADO)
-            .findFirst()
-            .orElseThrow(() ->
-                    new IllegalStateException(
-                            "O enum precisa possuir algum status diferente de AGENDADO"
-                    )
-            );
-}
-
-Esses testes cobrem:
-
-item com status AGENDADO;
-item com outro status;
-item com status nulo;
-item nulo dentro da lista;
-lista nula;
-response nulo;
-situação em que todos os registros são removidos.
-
-Só existe um ponto arquitetural para observar: como o filtro acontece depois da paginação, totalRecords, nextPage e a quantidade de itens por página podem continuar considerando registros cancelados ou excluídos. Quando o client permitir, o ideal é enviar o status AGENDADO para o serviço de origem e filtrar antes de paginar.
+Nenhum arquivo escolhido
