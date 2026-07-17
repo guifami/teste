@@ -128,4 +128,49 @@ A ordem atual está funcional, mas está confusa porque o controller recebe star
 Portanto, não é necessário corrigir o app. O app está enviando os valores; eles estão sendo perdidos na conversão para o ListPaymentReceiptRequestDTO.
 
 
-Nenhum arquivo escolhido
+17842888276405427426843171372828.jpg
+17842888476146048252960318499240.jpg
+quebrou aqui
+
+Quebrou porque o método parseDateTimeString da DateTimeUtils recebe apenas um argumento, mas você passou a data e o formato:
+
+parseDateTimeString(receipt.getOperationDate(), DATE_FORMAT_MAINFRAME)
+Troque esse trecho por:
+
+dto.setTransactionDate(
+        formatDate(
+                parseDateTimeString(receipt.getOperationDate()),
+                ofPattern(DATE_FORMAT_DD_MM_YYYY_HH_MM_SS)
+        )
+);
+Ou seja, remova o DATE_FORMAT_MAINFRAME de dentro do parseDateTimeString.
+
+Fica assim no método:
+
+dto.setTransactionCategoryName(OTHER_EXPENSE.getDescription());
+
+dto.setTransactionDate(
+        formatDate(
+                parseDateTimeString(receipt.getOperationDate()),
+                ofPattern(DATE_FORMAT_DD_MM_YYYY_HH_MM_SS)
+        )
+);
+
+dto.setTransactionAmount(
+        new BigDecimal(receipt.getValueOperation().replace("R", "").trim())
+);
+Caso o parseDateTimeString não consiga interpretar o formato vindo do mainframe, use a conversão explícita:
+
+dto.setTransactionDate(
+        LocalDateTime
+                .parse(
+                        receipt.getOperationDate(),
+                        DateTimeFormatter.ofPattern(DATE_FORMAT_MAINFRAME)
+                )
+                .format(DateTimeFormatter.ofPattern(DATE_FORMAT_DD_MM_YYYY_HH_MM_SS))
+);
+Com estes imports:
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+Eu testaria primeiro a primeira solução,
