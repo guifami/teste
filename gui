@@ -3,6 +3,7 @@ public List<BspiDuplicateListReceipt> getPayload() {
         return Optional.ofNullable(wrapperV3.getPayload())
                 .orElseGet(Collections::emptyList)
                 .stream()
+                .map(this::convertPayloadV3)
                 .map(BspiDuplicateListReceipt::new)
                 .collect(Collectors.toList());
     }
@@ -13,4 +14,10 @@ public List<BspiDuplicateListReceipt> getPayload() {
             .stream()
             .map(BspiDuplicateListReceipt::new)
             .collect(Collectors.toList());
+}
+
+private ListPayload convertPayloadV3(ListPayloadV3 payloadV3) {
+    ListPayload payload = new ListPayload();
+    BeanUtils.copyProperties(payloadV3, payload);
+    return payload;
 }
