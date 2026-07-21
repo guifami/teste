@@ -1,47 +1,58 @@
-let fusoHorario = time("03:00:00");
+let fusoBrasil = 3h;
+let agoraBrasil = now() - fusoBrasil;
 
-// Calcula automaticamente o último mês completo.
-// Exemplo: em julho, consulta de 01/06 00:00 até 01/07 00:00.
-let agoraLocal = now() - fusoHorario;
-let inicioMesAtualUTC = startofmonth(agoraLocal) + fusoHorario;
-let inicioMesAnteriorUTC = startofmonth(agoraLocal, -1) + fusoHorario;
+// Último mês-calendário completo no horário do Brasil.
+// Exemplo: se estivermos em julho, consulta de 01/06 até 01/07.
+let inicioMesAnteriorUTC =
+    startofmonth(agoraBrasil, -1) + fusoBrasil;
 
-// Localiza todos os containers do next-pix que existiram no período.
-let containersNextPix =
-    KubePodInventory
-    | where TimeGenerated >= inicioMesAnteriorUTC
-        and TimeGenerated < inicioMesAtualUTC
-    | where Name contains "next-pix"
-    | distinct ContainerID;
+let inicioMesAtualUTC =
+    startofmonth(agoraBrasil) + fusoBrasil;
 
-// Consulta os erros e calcula a volumetria.
 ContainerLog
 | where TimeGenerated >= inicioMesAnteriorUTC
     and TimeGenerated < inicioMesAtualUTC
-| where ContainerID in (containersNextPix)
+
+// Nome do container/microsserviço.
+| where Name contains "next-pix-payment"
+
+// Filtra antes de executar as expressões regulares.
 | where LogEntry has "ERROR"
+| where LogEntry has "codigo"
 
-// Remove as barras de escape do JSON: \"codigo\" vira "codigo".
-| extend LogNormalizado = replace_regex(LogEntry, @'\\+"', '"')
+| project LogEntry
 
-// Extrai os campos presentes dentro da LogEntry.
+// Funciona tanto para "codigo":"M0260"
+// quanto para \"codigo\":\"M0260\".
 | extend Codigo = extract(
-        @'"codigo"\s*:\s*"([^"]+)"',
-        1,
-        LogNormalizado
-    )
-| extend Descricao = extract(
-        @'"descricao"\s*:\s*"([^"]+)"',
-        1,
-        LogNormalizado
-    )
+    @'\\?"codigo\\?"\s*:\s*\\?"([^"\\]+)',
+    1,
+    LogEntry
+)
 
-// Desconsidera logs que não possuam o padrão esperado.
+// Extrai o campo descricao.
+| extend Descricao = extract(
+    @'\\?"descricao\\?"\s*:\s*\\?"([^"\\]+)',
+    1,
+    LogEntry
+)
+
+// Campo alternativo, caso o erro utilize descricaoDetalhe.
+| extend DescricaoDetalhe = extract(
+    @'\\?"descricaoDetalhe\\?"\s*:\s*\\?"([^"\\]+)',
+    1,
+    LogEntry
+)
+
 | where isnotempty(Codigo)
 
-// Agrupa os erros.
-| summarize Quantidade = count()
-    by Codigo, Descricao
+| extend DescricaoErro = coalesce(
+    Descricao,
+    DescricaoDetalhe,
+    "SEM DESCRICAO"
+)
 
-// Mostra primeiro os erros mais frequentes.
+| summarize Quantidade = count()
+    by Codigo, Descricao = DescricaoErro
+
 | order by Quantidade desc
