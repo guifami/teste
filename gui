@@ -1,58 +1,739 @@
-let fusoBrasil = 3h;
-let agoraBrasil = now() - fusoBrasil;
+// ============================================================================
+// 1. PixController.java
+// ============================================================================
+//
+// NÃO ALTERAR.
+//
+// Mantém:
+//
+// POST /v1/pix/transaction/availability
+// POST /v1/pix/countries
+//
+// O contrato externo permanece exatamente igual.
+//
+// ============================================================================
 
-// Último mês-calendário completo no horário do Brasil.
-// Exemplo: se estivermos em julho, consulta de 01/06 até 01/07.
-let inicioMesAnteriorUTC =
-    startofmonth(agoraBrasil, -1) + fusoBrasil;
 
-let inicioMesAtualUTC =
-    startofmonth(agoraBrasil) + fusoBrasil;
+// ============================================================================
+// 2. PixFavoredController.java
+// ============================================================================
+//
+// NÃO ALTERAR.
+//
+// Mantém:
+//
+// POST /v1/pix/favored/search/record
+//
+// O contrato externo permanece exatamente igual.
+//
+// ============================================================================
 
-ContainerLog
-| where TimeGenerated >= inicioMesAnteriorUTC
-    and TimeGenerated < inicioMesAtualUTC
 
-// Nome do container/microsserviço.
-| where Name contains "next-pix-payment"
+// ============================================================================
+// 3. B2bCountriesMapper.java - NOVO
+// ============================================================================
 
-// Filtra antes de executar as expressões regulares.
-| where LogEntry has "ERROR"
-| where LogEntry has "codigo"
+package br.com.bradesco.next.contingency.pix.domain.mapper.core;
 
-| project LogEntry
+import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryResponse;
+import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryRootResponse;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixCountryDto;
+import org.mapstruct.Mapper;
 
-// Funciona tanto para "codigo":"M0260"
-// quanto para \"codigo\":\"M0260\".
-| extend Codigo = extract(
-    @'\\?"codigo\\?"\s*:\s*\\?"([^"\\]+)',
-    1,
-    LogEntry
-)
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
-// Extrai o campo descricao.
-| extend Descricao = extract(
-    @'\\?"descricao\\?"\s*:\s*\\?"([^"\\]+)',
-    1,
-    LogEntry
-)
+@Mapper(componentModel = "spring")
+public interface B2bCountriesMapper {
 
-// Campo alternativo, caso o erro utilize descricaoDetalhe.
-| extend DescricaoDetalhe = extract(
-    @'\\?"descricaoDetalhe\\?"\s*:\s*\\?"([^"\\]+)',
-    1,
-    LogEntry
-)
+    default PixCountriesDto toPixCountriesDto(CountryRootResponse response) {
 
-| where isnotempty(Codigo)
+        var result = new PixCountriesDto();
 
-| extend DescricaoErro = coalesce(
-    Descricao,
-    DescricaoDetalhe,
-    "SEM DESCRICAO"
-)
+        List<PixCountryDto> countries = Optional
+                .ofNullable(response)
+                .map(CountryRootResponse::getListaPaises)
+                .orElseGet(Collections::emptyList)
+                .stream()
+                .map(this::toPixCountryDto)
+                .collect(Collectors.toList());
 
-| summarize Quantidade = count()
-    by Codigo, Descricao = DescricaoErro
+        result.setCountries(countries);
 
-| order by Quantidade desc
+        return result;
+    }
+
+    default PixCountryDto toPixCountryDto(CountryResponse source) {
+
+        var target = new PixCountryDto();
+
+        target.setCode(parseDdi(source.getDdi()));
+        target.setName(source.getNome());
+
+        return target;
+    }
+
+    default Integer parseDdi(String ddi) {
+
+        if (ddi == null || ddi.trim().isEmpty()) {
+            return null;
+        }
+
+        String normalized = ddi
+                .replace("+", "")
+                .trim();
+
+        try {
+            return Integer.valueOf(normalized);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}
+
+
+// ============================================================================
+// 4. PixCountriesService.java - SUBSTITUIR IMPLEMENTAÇÃO ATUAL
+// ============================================================================
+
+package br.com.bradesco.next.contingency.pix.service;
+
+import br.com.bradesco.next.contingency.pix.b2b.client.listagens.api.ListaDePaisesApi;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
+import br.com.bradesco.next.contingency.pix.domain.mapper.core.B2bCountriesMapper;
+import br.com.bradesco.next.contingency.pix.exception.UnprocessableEntityException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Service;
+
+import java.util.ResourceBundle;
+
+import static br.com.bradesco.next.contingency.pix.domain.enums.PixError.PIX_COUNTRIES_EMPTY_LIST;
+
+@Service
+public class PixCountriesService {
+
+    private static final Logger LOG =
+            LoggerFactory.getLogger(PixCountriesService.class);
+
+    private static final String COUNTRIES_CACHE_CATEGORY = "countries";
+
+    @Autowired
+    private ListaDePaisesApi listaDePaisesApi;
+
+    @Autowired
+    private B2bCountriesMapper b2bCountriesMapper;
+
+    @Autowired
+    private ResourceBundle strings;
+
+    @Cacheable(value = COUNTRIES_CACHE_CATEGORY)
+    public PixCountriesDto queryCountries() {
+
+        var response = listaDePaisesApi.callList();
+
+        if (response == null
+                || response.getListaPaises() == null
+                || response.getListaPaises().isEmpty()) {
+
+            LOG.error("Countries list is empty or null.");
+
+            throw new UnprocessableEntityException(
+                    PIX_COUNTRIES_EMPTY_LIST.getCode(),
+                    PIX_COUNTRIES_EMPTY_LIST,
+                    strings
+            );
+        }
+
+        return b2bCountriesMapper.toPixCountriesDto(response);
+    }
+}
+
+
+// ============================================================================
+// 5. B2bFavoredMapper.java - NOVO
+// ============================================================================
+
+package br.com.bradesco.next.contingency.pix.domain.mapper.core;
+
+import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.FavrDTOWithoutChannel;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixFavoredDto;
+import br.com.bradesco.next.contingency.pix.domain.enums.PixAccountTypeEnum;
+import br.com.bradesco.next.contingency.pix.domain.enums.PixFavoredTypeEnum;
+import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationStatusEnum;
+import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationTypeFavoredEnum;
+import org.mapstruct.Mapper;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+
+@Mapper(componentModel = "spring")
+public interface B2bFavoredMapper {
+
+    default PixFavoredDto toPixFavoredDto(FavrDTOWithoutChannel source) {
+
+        if (source == null) {
+            return null;
+        }
+
+        var target = new PixFavoredDto();
+
+        target.setPartition(parseInteger(source.getParticao()));
+
+        target.setFavoredCode(parseLong(source.getCodigoFavorecido()));
+
+        /*
+         * ATENÇÃO:
+         *
+         * Estes três são a equivalência mais provável entre
+         * o contrato B2B novo e o DTO legado.
+         *
+         * Recomendo conferir contra o responseToDto() do
+         * BspiFavoredMapper antigo antes do merge.
+         */
+        target.setLegalPersonCodeFavored(
+                parseLong(source.getCcpfCnpjFavorecido())
+        );
+
+        target.setContractTypeCodeFavored(
+                parseInteger(source.getCfilialCnpjFavorecido())
+        );
+
+        target.setContractSequentialNumberFavored(
+                parseLong(source.getCctrlCpfFavorecido())
+        );
+
+        target.setCpfCnpjFavored(
+                buildCpfCnpj(
+                        source.getCcpfCnpjFavorecido(),
+                        source.getCfilialCnpjFavorecido(),
+                        source.getCctrlCpfFavorecido()
+                )
+        );
+
+        target.setIspbCodeFavored(
+                parseInteger(source.getCispbBacenFavorecido())
+        );
+
+        target.setBankFavored(
+                parseInteger(source.getBancoFavorecido())
+        );
+
+        target.setBranchFavored(
+                parseInteger(source.getAgenciaFavorecido())
+        );
+
+        target.setAccountFavored(
+                parseLong(source.getContaFavorecido())
+        );
+
+        target.setDigitFavored(
+                parseInteger(source.getDigitoFavorecido())
+        );
+
+        target.setTypeAccount(
+                mapTypeAccount(source)
+        );
+
+        target.setKey(source.getChave());
+
+        target.setName(source.getNome());
+
+        target.setInput(
+                mapInput(source)
+        );
+
+        target.setRegister(
+                mapRegister(source)
+        );
+
+        target.setStartValidityDate(
+                parseLocalDateTime(source.getDataInicioValidade())
+        );
+
+        target.setRegistrationStatus(
+                mapRegistrationStatus(source)
+        );
+
+        return target;
+    }
+
+    default PixAccountTypeEnum mapTypeAccount(
+            FavrDTOWithoutChannel source) {
+
+        if (source.getTipoConta() == null) {
+            return null;
+        }
+
+        try {
+            return PixAccountTypeEnum.valueOf(
+                    source.getTipoConta().name()
+            );
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    default PixRegistrationTypeFavoredEnum mapInput(
+            FavrDTOWithoutChannel source) {
+
+        if (source.getEntrada() == null) {
+            return null;
+        }
+
+        try {
+            return PixRegistrationTypeFavoredEnum.valueOf(
+                    source.getEntrada().name()
+            );
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    default PixFavoredTypeEnum mapRegister(
+            FavrDTOWithoutChannel source) {
+
+        if (source.getCadastro() == null) {
+            return null;
+        }
+
+        try {
+            return PixFavoredTypeEnum.valueOf(
+                    source.getCadastro().name()
+            );
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    default PixRegistrationStatusEnum mapRegistrationStatus(
+            FavrDTOWithoutChannel source) {
+
+        if (source.getStatusCadastro() == null) {
+            return null;
+        }
+
+        try {
+            return PixRegistrationStatusEnum.valueOf(
+                    source.getStatusCadastro().name()
+            );
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    default Integer parseInteger(String value) {
+
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            return Integer.valueOf(
+                    value.replaceAll("\\D", "")
+            );
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    default Long parseLong(String value) {
+
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            return Long.valueOf(
+                    value.replaceAll("\\D", "")
+            );
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    default String buildCpfCnpj(
+            String codigo,
+            String filial,
+            String controle) {
+
+        if (codigo == null) {
+            return null;
+        }
+
+        StringBuilder result = new StringBuilder(codigo);
+
+        if (filial != null) {
+            result.append(filial);
+        }
+
+        if (controle != null) {
+            result.append(controle);
+        }
+
+        return result.toString();
+    }
+
+    default LocalDateTime parseLocalDateTime(String value) {
+
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            return LocalDateTime.parse(value);
+        } catch (DateTimeParseException ignored) {
+        }
+
+        try {
+            return LocalDateTime.parse(
+                    value,
+                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            );
+        } catch (DateTimeParseException ignored) {
+        }
+
+        try {
+            return LocalDateTime.parse(
+                    value,
+                    DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+            );
+        } catch (DateTimeParseException ignored) {
+        }
+
+        return null;
+    }
+}
+
+
+// ============================================================================
+// 6. PixFavoredService.java - SUBSTITUIR IMPLEMENTAÇÃO ATUAL
+// ============================================================================
+
+package br.com.bradesco.next.contingency.pix.service;
+
+import br.com.bradesco.next.contingency.pix.b2b.client.contatos.api.ContatosApi;
+import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.RequestFindRecordDTO;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixFavoredDto;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixSearchRecordFavoredDto;
+import br.com.bradesco.next.contingency.pix.domain.mapper.core.B2bFavoredMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.util.ResourceBundle;
+
+import static br.com.bradesco.next.contingency.pix.utils.ApplicationUtils.getCustomerInfo;
+
+// ajuste estes static imports para os mesmos usados no PixKeyValidationService
+import static br.com.bradesco.next.contingency.pix.domain.constants.PixConstants.CHANNEL_ID;
+
+@Service
+public class PixFavoredService {
+
+    /*
+     * Banco Bradesco.
+     *
+     * Estou deixando local para não depender do nome exato da
+     * constante do seu projeto.
+     *
+     * Se vocês já tiverem INTERNAL_BANK_CODE = "237",
+     * substitua por essa constante.
+     */
+    private static final String INTERNAL_BANK_CODE = "237";
+
+    @Autowired
+    private ContatosApi contatosApi;
+
+    @Autowired
+    private B2bFavoredMapper b2bFavoredMapper;
+
+    @Autowired
+    private ResourceBundle strings;
+
+    @Value("${next-contingency-pix.cloud.x-access-token-pix.value}")
+    private String xAccessTokenPix;
+
+    public PixFavoredDto searchRecordFavored(
+            PixSearchRecordFavoredDto pixSearchRecordFavoredRequestDto) {
+
+        var customerInfo = getCustomerInfo(strings);
+
+        var request = new RequestFindRecordDTO();
+
+        /*
+         * Mesmo conceito usado no ChavesApi:
+         *
+         * x-access-token-pix
+         * banco/agência/conta/canal do cliente
+         * chave que está sendo pesquisada
+         */
+
+        request.setCtpoCanal(
+                String.valueOf(CHANNEL_ID)
+        );
+
+        request.setBanco(
+                INTERNAL_BANK_CODE
+        );
+
+        request.setAgencia(
+                customerInfo.getBranch() != null
+                        ? String.valueOf(customerInfo.getBranch())
+                        : null
+        );
+
+        request.setConta(
+                customerInfo.getAccountNumber() != null
+                        ? String.valueOf(customerInfo.getAccountNumber())
+                        : null
+        );
+
+        request.setChave(
+                pixSearchRecordFavoredRequestDto.getKeyFavored()
+        );
+
+        /*
+         * Os campos abaixo são referentes à busca por dados
+         * específicos do favorecido.
+         *
+         * Como o contrato atual da sua controller recebe apenas
+         * keyFavored, eles devem continuar null.
+         *
+         * O gateway B2B fará a consulta pela chave.
+         */
+        request.setCispbBacenFavorecido(null);
+        request.setAgenciaFavorecido(null);
+        request.setContaFavorecido(null);
+        request.setDigitoFavorecido(null);
+        request.setCodigoFavorecido(null);
+
+        var response = contatosApi.findRecord(
+                xAccessTokenPix,
+                request
+        );
+
+        return b2bFavoredMapper.toPixFavoredDto(response);
+    }
+}
+
+
+// ============================================================================
+// 7. PixFavoredMapper.java
+// ============================================================================
+//
+// MANTER COMO ESTÁ.
+//
+// O seu mapper atual:
+//
+// @Mapper(componentModel = "spring")
+// public interface PixFavoredMapper {
+//
+//     @Mapping(target = "code", ignore = true)
+//     @Mapping(target = "messages", ignore = true)
+//     PixSearchRecordFavoredResponse dtoToResponse(
+//             PixFavoredDto pixFavoredDto
+//     );
+//
+//     PixSearchRecordFavoredDto requestToDto(
+//             PixSearchRecordFavoredRequest request
+//     );
+// }
+//
+// Continua funcionando.
+//
+// Isso é importante porque mantém exatamente o mesmo contrato
+// de response da controller.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 8. PixFavoredController.java
+// ============================================================================
+//
+// CONTINUA ASSIM:
+//
+// public PixSearchRecordFavoredResponse searchRecord(
+//         @RequestHeader(value = X_NEXT_AUTH_ENCRYPT_TOKEN) String token,
+//         @RequestBody PixSearchRecordFavoredRequest request) {
+//
+//     return pixFavoredMapper.dtoToResponse(
+//             pixFavoredService.searchRecordFavored(
+//                     pixFavoredMapper.requestToDto(request)
+//             )
+//     );
+// }
+//
+// Não troca request.
+// Não troca response.
+// Não troca rota.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 9. PixController.java - COUNTRIES
+// ============================================================================
+//
+// CONTINUA:
+//
+// @ApiOperation(value = "Countries")
+// @RequestMapping(
+//         path = COUNTRIES,
+//         method = POST,
+//         produces = APPLICATION_JSON_VALUE
+// )
+// public CountriesResponse getCountries(
+//         @RequestHeader(value = X_NEXT_AUTH_ENCRYPT_TOKEN)
+//         @NotNull String token) {
+//
+//     return countriesMapper.toCountriesResponse(
+//             pixCountriesService.queryCountries()
+//     );
+// }
+//
+// Ou exatamente a versão que já existe hoje.
+//
+// NÃO expor CountryRootResponse.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 10. PixService.java - AVAILABILITY
+// ============================================================================
+//
+// NÃO ALTERAR.
+//
+// Continua usando:
+//
+// verifyTransactionAvailability()
+// getSearchDateTimeResponse()
+// findTransactionTimeRestriction()
+// findTimeRestrictionInSpecificDays()
+// findTimeRestrictionInPeriods()
+// verifyTimeWithinAllowedLimit()
+//
+// Esse fluxo NÃO precisa usar gateway B2B.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 11. CLASSES ANTIGAS QUE DEIXAM DE SER USADAS NESTES DOIS FLUXOS
+// ============================================================================
+//
+// COUNTRIES:
+//
+// BspiEngClient                         -> não usar em queryCountries()
+// BspiCountriesMapper                  -> não usar em queryCountries()
+// BspiCountriesResponse                -> não usar
+//
+//
+// FAVORED:
+//
+// BspiFavoredService                   -> deixa de ser chamado
+// BspiApiFavoredEngClient              -> deixa de ser chamado
+// BspiFavoredMapper                    -> deixa de ser chamado
+// BspiFavoredResponse                  -> deixa de ser usado
+//
+//
+// IMPORTANTE:
+//
+// Eu NÃO apagaria essas classes agora.
+//
+// Primeiro faria a migração, testes e busca por usages.
+//
+// Depois, se realmente ficarem com 0 usages, aí sim removeria.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 12. FLUXO FINAL
+// ============================================================================
+//
+// COUNTRIES:
+//
+// POST /v1/pix/countries
+//
+// PixController
+//      |
+//      v
+// PixCountriesService
+//      |
+//      v
+// ListaDePaisesApi.callList()
+//      |
+//      v
+// CountryRootResponse
+//      |
+//      v
+// B2bCountriesMapper
+//      |
+//      v
+// PixCountriesDto
+//      |
+//      v
+// CountriesMapper
+//      |
+//      v
+// CountriesResponse
+//
+//
+// ---------------------------------------------------------------------------
+//
+// FAVORED:
+//
+// POST /v1/pix/favored/search/record
+//
+// PixFavoredController
+//      |
+//      v
+// PixFavoredMapper.requestToDto()
+//      |
+//      v
+// PixFavoredService
+//      |
+//      +--> getCustomerInfo(strings)
+//      |
+//      +--> RequestFindRecordDTO
+//      |
+//      v
+// ContatosApi.findRecord(
+//      xAccessTokenPix,
+//      request
+// )
+//      |
+//      v
+// FavrDTOWithoutChannel
+//      |
+//      v
+// B2bFavoredMapper
+//      |
+//      v
+// PixFavoredDto
+//      |
+//      v
+// PixFavoredMapper.dtoToResponse()
+//      |
+//      v
+// PixSearchRecordFavoredResponse
+//
+//
+// ---------------------------------------------------------------------------
+//
+// AVAILABILITY:
+//
+// POST /v1/pix/transaction/availability
+//
+// permanece 100% como está.
+//
+// ============================================================================
