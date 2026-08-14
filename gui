@@ -1,212 +1,26 @@
-// ============================================================================
-// B2bCountriesMapper.java
-// ============================================================================
-package br.com.bradesco.next.contingency.pix.domain.mapper.core;
-
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryResponse;
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryRootResponse;
-import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
-import br.com.bradesco.next.contingency.pix.domain.dto.PixCountryDto;
-import org.springframework.stereotype.Component;
-
-import java.util.Collections;
-import java.util.Optional;
-import java.util.stream.Collectors;
-
-@Component
-public class B2bCountriesMapper {
-
-    public PixCountriesDto toPixCountriesDto(CountryRootResponse response) {
-        var dto = new PixCountriesDto();
-        dto.setCountries(Optional.ofNullable(response)
-                .map(CountryRootResponse::getListaPaises)
-                .orElseGet(Collections::emptyList)
-                .stream()
-                .map(this::toPixCountryDto)
-                .collect(Collectors.toList()));
-        return dto;
-    }
-
-    private PixCountryDto toPixCountryDto(CountryResponse response) {
-        var dto = new PixCountryDto();
-        dto.setCode(parseDdi(response.getDdi()));
-        dto.setName(response.getNome());
-        return dto;
-    }
-
-    private Integer parseDdi(String ddi) {
-        if (ddi == null || ddi.isBlank()) return null;
-        var value = ddi.replaceAll("[^0-9]", "");
-        return value.isEmpty() ? null : Integer.valueOf(value);
-    }
-}
-
-
-// ============================================================================
-// PixCountriesService.java
-// manter os mesmos imports atuais de PIX_COUNTRIES_EMPTY_LIST,
-// UnprocessableEntityException e StringBundle
-// ============================================================================
-@Service
-public class PixCountriesService {
-
-    private static final Logger LOG = LoggerFactory.getLogger(PixCountriesService.class);
-    private static final String COUNTRIES_CACHE_CATEGORY = "countries";
-
-    @Autowired
-    private ListaDePaisesApi listaDePaisesApi;
-
-    @Autowired
-    private B2bCountriesMapper b2bCountriesMapper;
-
-    @Autowired
-    private StringBundle strings;
-
-    @Cacheable(value = COUNTRIES_CACHE_CATEGORY)
-    public PixCountriesDto queryCountries() {
-        var response = listaDePaisesApi.callList();
-
-        if (response == null || response.getListaPaises() == null || response.getListaPaises().isEmpty()) {
-            LOG.error("Countries list is empty or null.");
-            throw new UnprocessableEntityException(
-                    PIX_COUNTRIES_EMPTY_LIST.getCode(),
-                    PIX_COUNTRIES_EMPTY_LIST,
-                    strings
-            );
-        }
-
-        return b2bCountriesMapper.toPixCountriesDto(response);
-    }
-}
-
-
-// ============================================================================
-// B2bFavoredMapper.java
-// ============================================================================
-package br.com.bradesco.next.contingency.pix.domain.mapper.core;
-
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.FavrDTOWithoutChannel;
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.RequestFindRecordDTO;
-import br.com.bradesco.next.contingency.pix.domain.dto.PixFavoredDto;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixAccountTypeEnum;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixFavoredTypeEnum;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationStatusEnum;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationTypeFavoredEnum;
-import org.mapstruct.AfterMapping;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.MappingTarget;
-
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
-import static br.com.bradesco.next.common.util.NextApiUtils.CHANNEL_ID;
-import static br.com.bradesco.next.common.util.NextApiUtils.INTERNAL_BANK_CODE;
-import static br.com.bradesco.next.common.util.NextApiUtils.INTERNAL_BANK_ISPB;
+private static final DateTimeFormatter B2B_DATE_FORMAT =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
 
-@Mapper(componentModel = "spring")
-public abstract class B2bFavoredMapper {
-
-    @Mapping(target = "agencia", source = "customerInfo.branch")
-    @Mapping(target = "conta", source = "customerInfo.accountNumber")
-    @Mapping(target = "chave", source = "key")
-    @Mapping(target = "cispbBacenFavorecido", constant = INTERNAL_BANK_ISPB)
-    @Mapping(target = "ctpoCanal", ignore = true)
-    @Mapping(target = "banco", ignore = true)
-    @Mapping(target = "agenciaFavorecido", ignore = true)
-    @Mapping(target = "contaFavorecido", ignore = true)
-    @Mapping(target = "digitoFavorecido", ignore = true)
-    @Mapping(target = "codigoFavorecido", ignore = true)
-    public abstract RequestFindRecordDTO toRequest(String key, CustomerInfo customerInfo);
-
-    @AfterMapping
-    protected void afterMapping(@MappingTarget RequestFindRecordDTO request) {
-        request.setCtpoCanal(String.valueOf(CHANNEL_ID));
-        request.setBanco(String.valueOf(INTERNAL_BANK_CODE));
-    }
-
-    @Mapping(target = "partition", source = "particao")
-    @Mapping(target = "favoredCode", source = "codigoFavorecido")
-    @Mapping(target = "legalPersonCodeFavored", ignore = true)
-    @Mapping(target = "contractTypeCodeFavored", ignore = true)
-    @Mapping(target = "contractSequentialNumberFavored", ignore = true)
-    @Mapping(target = "cpfCnpjFavored", source = "ccpfCnpjFavorecido")
-    @Mapping(target = "ispbCodeFavored", source = "cispbBacenFavorecido")
-    @Mapping(target = "bankFavored", source = "bancoFavorecido")
-    @Mapping(target = "branchFavored", source = "agenciaFavorecido")
-    @Mapping(target = "accountFavored", source = "contaFavorecido")
-    @Mapping(target = "digitFavored", source = "digitoFavorecido")
-    @Mapping(target = "typeAccount", source = "tipoConta")
-    @Mapping(target = "key", source = "chave")
-    @Mapping(target = "name", source = "nome")
-    @Mapping(target = "input", source = "entrada")
-    @Mapping(target = "register", source = "cadastro")
-    @Mapping(target = "startValidityDate", source = "dataInicioValidade")
-    @Mapping(target = "registrationStatus", source = "statusCadastro")
-    public abstract PixFavoredDto responseToDto(FavrDTOWithoutChannel response);
-
-    protected PixAccountTypeEnum map(FavrDTOWithoutChannel.TipoContaEnum value) {
-        return value == null ? null : PixAccountTypeEnum.valueOf(value.name());
-    }
-
-    protected PixRegistrationTypeFavoredEnum map(FavrDTOWithoutChannel.EntradaEnum value) {
-        return value == null ? null : PixRegistrationTypeFavoredEnum.valueOf(value.name());
-    }
-
-    protected PixFavoredTypeEnum map(FavrDTOWithoutChannel.CadastroEnum value) {
-        return value == null ? null : PixFavoredTypeEnum.valueOf(value.name());
-    }
-
-    protected PixRegistrationStatusEnum map(FavrDTOWithoutChannel.StatusCadastroEnum value) {
-        return value == null ? null : PixRegistrationStatusEnum.valueOf(value.name());
-    }
-
-    protected LocalDateTime map(String value) {
-        return value == null || value.isBlank() ? null : LocalDateTime.parse(value);
-    }
+protected PixAccountTypeEnum map(FavrDTOWithoutChannel.TipoContaEnum value) {
+    return value == null ? null : PixAccountTypeEnum.fromValue(value.getValue());
 }
 
-
-// ============================================================================
-// PixFavoredService.java
-// SUBSTITUIR O USO DO BspiFavoredService
-// ============================================================================
-@Service
-public class PixFavoredService {
-
-    @Autowired
-    private ContatosApi contatosApi;
-
-    @Autowired
-    private B2bFavoredMapper b2bFavoredMapper;
-
-    @Autowired
-    private StringBundle strings;
-
-    @Value("${next-contingency-pix.cloud.x-access-token-pix.value}")
-    private String xAccessTokenPix;
-
-    public PixFavoredDto searchRecordFavored(PixSearchRecordFavoredDto requestDto) {
-        var customerInfo = getCustomerInfo(strings);
-        var request = b2bFavoredMapper.toRequest(requestDto.getKeyFavored(), customerInfo);
-        var response = contatosApi.findRecord(xAccessTokenPix, request);
-        return b2bFavoredMapper.responseToDto(response);
-    }
+protected PixRegistrationTypeFavoredEnum map(FavrDTOWithoutChannel.EntradaEnum value) {
+    return value == null ? null : PixRegistrationTypeFavoredEnum.fromValue(value.getValue());
 }
 
+protected PixFavoredTypeEnum map(FavrDTOWithoutChannel.CadastroEnum value) {
+    return value == null ? null : PixFavoredTypeEnum.fromValue(value.getValue());
+}
 
-// ============================================================================
-// NÃO ALTERAR
-// ============================================================================
-//
-// PixController.java
-//   /v1/pix/transaction/availability -> continua como está
-//   /v1/pix/countries                -> continua como está
-//
-// PixFavoredController.java           -> continua como está
-// PixFavoredMapper.java               -> continua como está
-// PixService.java                     -> availability continua como está
-//
-// BspiFavoredService deixa de ser usado pelo PixFavoredService.
-// BspiCountriesMapper/BspiEngClient deixam de ser usados pelo countries.
-// Não precisa deletar agora; pode remover código morto depois.
-// ============================================================================
+protected PixRegistrationStatusEnum map(FavrDTOWithoutChannel.StatusCadastroEnum value) {
+    return value == null ? null : PixRegistrationStatusEnum.fromValue(value.getValue());
+}
+
+protected LocalDateTime map(String value) {
+    if (value == null || value.isBlank()) return null;
+    return LocalDateTime.parse(value, B2B_DATE_FORMAT);
+}
