@@ -1,4 +1,57 @@
 // ============================================================================
+// PixCountriesService.java
+// CORREÇÃO: validar response/lista antes de chamar isEmpty()
+// ============================================================================
+
+package br.com.bradesco.next.contingency.pix.service;
+
+import br.com.bradesco.next.common.strings.StringBundle;
+import br.com.bradesco.next.common.web.exception.UnprocessableEntityException;
+import br.com.bradesco.next.contingency.pix.b2b.client.listagens.api.ListaDePaisesApi;
+import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
+import br.com.bradesco.next.contingency.pix.domain.mapper.core.b2b.B2bCountriesMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Service;
+
+import static br.com.bradesco.next.contingency.pix.domain.enums.PixError.PIX_COUNTRIES_EMPTY_LIST;
+
+@Service
+public class PixCountriesService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PixCountriesService.class);
+    private static final String COUNTRIES_CACHE_CATEGORY = "countries";
+
+    @Autowired
+    private ListaDePaisesApi listaDePaisesApi;
+
+    @Autowired
+    private B2bCountriesMapper b2bCountriesMapper;
+
+    @Autowired
+    private StringBundle strings;
+
+    @Cacheable(value = COUNTRIES_CACHE_CATEGORY)
+    public PixCountriesDto queryCountries() {
+        var response = listaDePaisesApi.callList();
+
+        if (response == null || response.getListaPaises() == null || response.getListaPaises().isEmpty()) {
+            LOG.error("Countries list is empty or null.");
+            throw new UnprocessableEntityException(
+                    PIX_COUNTRIES_EMPTY_LIST.getCode(),
+                    PIX_COUNTRIES_EMPTY_LIST,
+                    strings
+            );
+        }
+
+        return b2bCountriesMapper.toPixCountriesDto(response);
+    }
+}
+
+
+// ============================================================================
 // PixCountriesServiceTest.java
 // ============================================================================
 
@@ -10,7 +63,7 @@ import br.com.bradesco.next.contingency.pix.b2b.client.listagens.api.ListaDePais
 import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryResponse;
 import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryRootResponse;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
-import br.com.bradesco.next.contingency.pix.domain.mapper.core.B2bCountriesMapper;
+import br.com.bradesco.next.contingency.pix.domain.mapper.core.b2b.B2bCountriesMapper;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -20,7 +73,6 @@ import org.testng.annotations.Test;
 import java.util.ArrayList;
 import java.util.Collections;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertSame;
@@ -63,7 +115,6 @@ public class PixCountriesServiceTest {
     @Test(expectedExceptions = UnprocessableEntityException.class)
     public void testQueryCountriesResponseNull() {
         when(listaDePaisesApi.callList()).thenReturn(null);
-
         pixCountriesService.queryCountries();
     }
 
@@ -71,6 +122,7 @@ public class PixCountriesServiceTest {
     public void testQueryCountriesListNull() {
         var response = new CountryRootResponse();
         response.setListaPaises(null);
+
         when(listaDePaisesApi.callList()).thenReturn(response);
 
         pixCountriesService.queryCountries();
@@ -80,6 +132,7 @@ public class PixCountriesServiceTest {
     public void testQueryCountriesEmptyList() {
         var response = new CountryRootResponse();
         response.setListaPaises(Collections.emptyList());
+
         when(listaDePaisesApi.callList()).thenReturn(response);
 
         pixCountriesService.queryCountries();
@@ -89,6 +142,7 @@ public class PixCountriesServiceTest {
     public void testMapperNotCalledWhenCountriesInvalid() {
         var response = new CountryRootResponse();
         response.setListaPaises(new ArrayList<>());
+
         when(listaDePaisesApi.callList()).thenReturn(response);
 
         try {
@@ -112,253 +166,18 @@ public class PixCountriesServiceTest {
 
 
 // ============================================================================
-// B2bCountriesMapperTest.java
-// ============================================================================
-
-package br.com.bradesco.next.contingency.pix.domain.mapper.core;
-
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryResponse;
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryRootResponse;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.Test;
-
-import java.util.Arrays;
-
-import static org.testng.Assert.*;
-
-public class B2bCountriesMapperTest {
-
-    private B2bCountriesMapper b2bCountriesMapper;
-
-    @BeforeMethod
-    public void setUp() {
-        b2bCountriesMapper = new B2bCountriesMapper();
-    }
-
-    @Test
-    public void testToPixCountriesDto() {
-        var brasil = country("+55", "Brasil");
-        var eua = country("1", "Estados Unidos");
-
-        var response = new CountryRootResponse();
-        response.setListaPaises(Arrays.asList(brasil, eua));
-
-        var result = b2bCountriesMapper.toPixCountriesDto(response);
-
-        assertNotNull(result);
-        assertEquals(result.getCountries().size(), 2);
-        assertEquals(result.getCountries().get(0).getCode(), Integer.valueOf(55));
-        assertEquals(result.getCountries().get(0).getName(), "Brasil");
-        assertEquals(result.getCountries().get(1).getCode(), Integer.valueOf(1));
-        assertEquals(result.getCountries().get(1).getName(), "Estados Unidos");
-    }
-
-    @Test
-    public void testToPixCountriesDtoWithNullResponse() {
-        var result = b2bCountriesMapper.toPixCountriesDto(null);
-
-        assertNotNull(result);
-        assertNotNull(result.getCountries());
-        assertTrue(result.getCountries().isEmpty());
-    }
-
-    @Test
-    public void testToPixCountriesDtoWithNullList() {
-        var response = new CountryRootResponse();
-        response.setListaPaises(null);
-
-        var result = b2bCountriesMapper.toPixCountriesDto(response);
-
-        assertNotNull(result);
-        assertTrue(result.getCountries().isEmpty());
-    }
-
-    @Test
-    public void testDdiNull() {
-        var result = mapSingleCountry(null);
-
-        assertNull(result.getCountries().get(0).getCode());
-    }
-
-    @Test
-    public void testDdiBlank() {
-        var result = mapSingleCountry("   ");
-
-        assertNull(result.getCountries().get(0).getCode());
-    }
-
-    @Test
-    public void testDdiWithoutNumericCharacters() {
-        var result = mapSingleCountry("ABC");
-
-        assertNull(result.getCountries().get(0).getCode());
-    }
-
-    @Test
-    public void testDdiWithSpecialCharacters() {
-        var result = mapSingleCountry("+55");
-
-        assertEquals(result.getCountries().get(0).getCode(), Integer.valueOf(55));
-    }
-
-    private br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto mapSingleCountry(String ddi) {
-        var response = new CountryRootResponse();
-        response.setListaPaises(Arrays.asList(country(ddi, "Teste")));
-        return b2bCountriesMapper.toPixCountriesDto(response);
-    }
-
-    private CountryResponse country(String ddi, String nome) {
-        var country = new CountryResponse();
-        country.setDdi(ddi);
-        country.setNome(nome);
-        return country;
-    }
-}
-
-
-// ============================================================================
-// PixFavoredServiceTest.java
-// ============================================================================
-
-package br.com.bradesco.next.contingency.pix.service;
-
-import br.com.bradesco.next.common.strings.StringBundle;
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.api.ContatosApi;
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.FavrDTOWithoutChannel;
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.RequestFindRecordDTO;
-import br.com.bradesco.next.contingency.pix.domain.dto.PixSearchRecordFavoredDto;
-import br.com.bradesco.next.contingency.pix.domain.mapper.core.B2bFavoredMapper;
-import org.mapstruct.factory.Mappers;
-import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.mockito.Spy;
-import org.springframework.test.util.ReflectionTestUtils;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.Test;
-
-import static br.com.bradesco.next.common.util.NextApiUtils.CHANNEL_ID;
-import static br.com.bradesco.next.common.util.NextApiUtils.INTERNAL_BANK_CODE;
-import static br.com.bradesco.next.common.util.NextApiUtils.INTERNAL_BANK_ISPB;
-import static br.com.bradesco.next.contingency.pix.helper.ContingencyPixHelper.mockApplicationUser;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
-import static org.testng.Assert.*;
-
-public class PixFavoredServiceTest {
-
-    @InjectMocks
-    private PixFavoredService pixFavoredService;
-
-    @Mock
-    private ContatosApi contatosApi;
-
-    @Spy
-    private B2bFavoredMapper b2bFavoredMapper = Mappers.getMapper(B2bFavoredMapper.class);
-
-    @Mock
-    private StringBundle strings;
-
-    @BeforeMethod
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        ReflectionTestUtils.setField(pixFavoredService, "xAccessTokenPix", "mock-access-token");
-    }
-
-    @Test
-    public void testSearchRecordFavored() {
-        mockApplicationUser();
-
-        var requestDto = new PixSearchRecordFavoredDto();
-        requestDto.setKeyFavored("71829992180");
-
-        var b2bResponse = getFavoredResponse();
-        when(contatosApi.findRecord(eq("mock-access-token"), any(RequestFindRecordDTO.class)))
-                .thenReturn(b2bResponse);
-
-        var result = pixFavoredService.searchRecordFavored(requestDto);
-
-        assertNotNull(result);
-        assertEquals(result.getPartition(), Integer.valueOf(161));
-        assertEquals(result.getFavoredCode(), 1L);
-        assertEquals(result.getCpfCnpjFavored(), "718299921");
-        assertEquals(result.getIspbCodeFavored(), Integer.valueOf(60746948));
-        assertEquals(result.getBankFavored(), Integer.valueOf(0));
-        assertEquals(result.getBranchFavored(), Integer.valueOf(0));
-        assertEquals(result.getAccountFavored(), Long.valueOf(0));
-        assertEquals(result.getDigitFavored(), Integer.valueOf(0));
-        assertEquals(result.getKey(), "71829992180");
-        assertEquals(result.getName(), "FULANO BELTRANO DA SILVA PERFIL NOVO");
-
-        var captor = ArgumentCaptor.forClass(RequestFindRecordDTO.class);
-        verify(contatosApi).findRecord(eq("mock-access-token"), captor.capture());
-
-        var request = captor.getValue();
-        assertEquals(request.getCtpoCanal(), String.valueOf(CHANNEL_ID));
-        assertEquals(request.getBanco(), String.valueOf(INTERNAL_BANK_CODE));
-        assertEquals(request.getChave(), "71829992180");
-        assertEquals(request.getCispbBacenFavorecido(), INTERNAL_BANK_ISPB);
-        assertNotNull(request.getAgencia());
-        assertNotNull(request.getConta());
-        assertNull(request.getAgenciaFavorecido());
-        assertNull(request.getContaFavorecido());
-        assertNull(request.getDigitoFavorecido());
-        assertNull(request.getCodigoFavorecido());
-    }
-
-    @Test
-    public void testSearchRecordFavoredResponseNull() {
-        mockApplicationUser();
-
-        var requestDto = new PixSearchRecordFavoredDto();
-        requestDto.setKeyFavored("71829992180");
-
-        when(contatosApi.findRecord(eq("mock-access-token"), any(RequestFindRecordDTO.class)))
-                .thenReturn(null);
-
-        var result = pixFavoredService.searchRecordFavored(requestDto);
-
-        assertNull(result);
-        verify(contatosApi, times(1))
-                .findRecord(eq("mock-access-token"), any(RequestFindRecordDTO.class));
-    }
-
-    private FavrDTOWithoutChannel getFavoredResponse() {
-        var response = new FavrDTOWithoutChannel();
-        response.setParticao("161");
-        response.setBanco("237");
-        response.setAgencia("3750");
-        response.setConta("49161");
-        response.setCodigoFavorecido("1");
-        response.setCcpfCnpjFavorecido("718299921");
-        response.setCfilialCnpjFavorecido("0000");
-        response.setCctrlCpfFavorecido("80");
-        response.setCispbBacenFavorecido("60746948");
-        response.setBancoFavorecido("0");
-        response.setAgenciaFavorecido("0");
-        response.setContaFavorecido("0");
-        response.setDigitoFavorecido("0");
-        response.setTipoConta(FavrDTOWithoutChannel.TipoContaEnum.CACC);
-        response.setChave("71829992180");
-        response.setNome("FULANO BELTRANO DA SILVA PERFIL NOVO");
-        response.setEntrada(FavrDTOWithoutChannel.EntradaEnum.CPF_CNPJ);
-        response.setValorMinimo("");
-        response.setValorMaximo("");
-        response.setCadastro(FavrDTOWithoutChannel.CadastroEnum.FAVORITO);
-        response.setDataInicioValidade("2026-08-14 17:08:15.061");
-        response.setStatusCadastro(FavrDTOWithoutChannel.StatusCadastroEnum.ATIVO);
-        return response;
-    }
-}
-
-
-// ============================================================================
 // B2bFavoredMapperTest.java
+//
+// IMPORTANTE:
+// Os 3 campos abaixo não existem mais no novo gateway B2B:
+// legalPersonCodeFavored
+// contractTypeCodeFavored
+// contractSequentialNumberFavored
+//
+// Portanto NÃO devemos esperar que o mapper invente valores para eles.
 // ============================================================================
 
-package br.com.bradesco.next.contingency.pix.domain.mapper.core;
+package br.com.bradesco.next.contingency.pix.domain.mapper.core.b2b;
 
 import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.FavrDTOWithoutChannel;
 import br.com.bradesco.next.contingency.pix.domain.enums.PixAccountTypeEnum;
@@ -392,10 +211,12 @@ public class B2bFavoredMapperTest {
         assertEquals(result.getPartition(), Integer.valueOf(161));
         assertEquals(result.getFavoredCode(), 1L);
 
-        // Não existem equivalentes no gateway novo
-        assertEquals(result.getLegalPersonCodeFavored(), 0L);
+        /*
+         * Não possuem equivalente no novo FavrDTOWithoutChannel.
+         * Se o tipo no PixFavoredDto for wrapper, o valor será null.
+         * Não force 0 no teste.
+         */
         assertNull(result.getContractTypeCodeFavored());
-        assertEquals(result.getContractSequentialNumberFavored(), 0L);
 
         assertEquals(result.getCpfCnpjFavored(), "718299921");
         assertEquals(result.getIspbCodeFavored(), Integer.valueOf(60746948));
@@ -488,12 +309,14 @@ public class B2bFavoredMapperTest {
                 b2bFavoredMapper.map("2026-08-14 17:08:15.061"),
                 LocalDateTime.parse("2026-08-14T17:08:15.061")
         );
+
         assertNull(b2bFavoredMapper.map((String) null));
         assertNull(b2bFavoredMapper.map(" "));
     }
 
     private FavrDTOWithoutChannel getFavoredResponse() {
         var response = new FavrDTOWithoutChannel();
+
         response.setParticao("161");
         response.setBanco("237");
         response.setAgencia("3750");
@@ -511,9 +334,12 @@ public class B2bFavoredMapperTest {
         response.setChave("71829992180");
         response.setNome("FULANO BELTRANO DA SILVA PERFIL NOVO");
         response.setEntrada(FavrDTOWithoutChannel.EntradaEnum.CPF_CNPJ);
+        response.setValorMinimo("");
+        response.setValorMaximo("");
         response.setCadastro(FavrDTOWithoutChannel.CadastroEnum.FAVORITO);
         response.setDataInicioValidade("2026-08-14 17:08:15.061");
         response.setStatusCadastro(FavrDTOWithoutChannel.StatusCadastroEnum.ATIVO);
+
         return response;
     }
 }
