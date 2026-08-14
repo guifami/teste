@@ -1,126 +1,72 @@
-// ============================================================================
-// 1. PixController.java
-// ============================================================================
-//
-// NÃO ALTERAR.
-//
-// Mantém:
-//
-// POST /v1/pix/transaction/availability
-// POST /v1/pix/countries
-//
-// O contrato externo permanece exatamente igual.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 2. PixFavoredController.java
-// ============================================================================
-//
-// NÃO ALTERAR.
-//
-// Mantém:
-//
-// POST /v1/pix/favored/search/record
-//
-// O contrato externo permanece exatamente igual.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 3. B2bCountriesMapper.java - NOVO
-// ============================================================================
-
+// ============================================================
+// B2bCountriesMapper.java
+// ============================================================
 package br.com.bradesco.next.contingency.pix.domain.mapper.core;
 
 import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryResponse;
 import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryRootResponse;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixCountryDto;
-import org.mapstruct.Mapper;
+import org.springframework.stereotype.Component;
 
 import java.util.Collections;
-import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-@Mapper(componentModel = "spring")
-public interface B2bCountriesMapper {
+@Component
+public class B2bCountriesMapper {
 
-    default PixCountriesDto toPixCountriesDto(CountryRootResponse response) {
-
+    public PixCountriesDto toPixCountriesDto(CountryRootResponse response) {
         var result = new PixCountriesDto();
-
-        List<PixCountryDto> countries = Optional
-                .ofNullable(response)
+        var countries = Optional.ofNullable(response)
                 .map(CountryRootResponse::getListaPaises)
                 .orElseGet(Collections::emptyList)
                 .stream()
+                .filter(Objects::nonNull)
                 .map(this::toPixCountryDto)
                 .collect(Collectors.toList());
-
         result.setCountries(countries);
-
         return result;
     }
 
-    default PixCountryDto toPixCountryDto(CountryResponse source) {
-
-        var target = new PixCountryDto();
-
-        target.setCode(parseDdi(source.getDdi()));
-        target.setName(source.getNome());
-
-        return target;
+    private PixCountryDto toPixCountryDto(CountryResponse response) {
+        var dto = new PixCountryDto();
+        dto.setCode(parseDdi(response.getDdi()));
+        dto.setName(response.getNome());
+        return dto;
     }
 
-    default Integer parseDdi(String ddi) {
-
-        if (ddi == null || ddi.trim().isEmpty()) {
-            return null;
-        }
-
-        String normalized = ddi
-                .replace("+", "")
-                .trim();
-
-        try {
-            return Integer.valueOf(normalized);
-        } catch (NumberFormatException e) {
-            return null;
-        }
+    private Integer parseDdi(String ddi) {
+        if (ddi == null || ddi.trim().isEmpty()) return null;
+        var numericDdi = ddi.replaceAll("[^0-9]", "");
+        return numericDdi.isEmpty() ? null : Integer.valueOf(numericDdi);
     }
 }
 
 
-// ============================================================================
-// 4. PixCountriesService.java - SUBSTITUIR IMPLEMENTAÇÃO ATUAL
-// ============================================================================
-
+// ============================================================
+// PixCountriesService.java
+// ============================================================
 package br.com.bradesco.next.contingency.pix.service;
 
 import br.com.bradesco.next.contingency.pix.b2b.client.listagens.api.ListaDePaisesApi;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
 import br.com.bradesco.next.contingency.pix.domain.mapper.core.B2bCountriesMapper;
-import br.com.bradesco.next.contingency.pix.exception.UnprocessableEntityException;
+import br.com.bradesco.next.common.exception.UnprocessableEntityException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.support.StringBundle;
 import org.springframework.stereotype.Service;
 
-import java.util.ResourceBundle;
-
-import static br.com.bradesco.next.contingency.pix.domain.enums.PixError.PIX_COUNTRIES_EMPTY_LIST;
+// manter static import atual de PIX_COUNTRIES_EMPTY_LIST
 
 @Service
 public class PixCountriesService {
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(PixCountriesService.class);
-
+    private static final Logger LOG = LoggerFactory.getLogger(PixCountriesService.class);
     private static final String COUNTRIES_CACHE_CATEGORY = "countries";
 
     @Autowired
@@ -130,19 +76,14 @@ public class PixCountriesService {
     private B2bCountriesMapper b2bCountriesMapper;
 
     @Autowired
-    private ResourceBundle strings;
+    private StringBundle strings;
 
     @Cacheable(value = COUNTRIES_CACHE_CATEGORY)
     public PixCountriesDto queryCountries() {
-
         var response = listaDePaisesApi.callList();
 
-        if (response == null
-                || response.getListaPaises() == null
-                || response.getListaPaises().isEmpty()) {
-
+        if (response == null || response.getListaPaises() == null || response.getListaPaises().isEmpty()) {
             LOG.error("Countries list is empty or null.");
-
             throw new UnprocessableEntityException(
                     PIX_COUNTRIES_EMPTY_LIST.getCode(),
                     PIX_COUNTRIES_EMPTY_LIST,
@@ -155,297 +96,144 @@ public class PixCountriesService {
 }
 
 
-// ============================================================================
-// 5. B2bFavoredMapper.java - NOVO
-// ============================================================================
-
+// ============================================================
+// B2bFavoredMapper.java
+// ============================================================
 package br.com.bradesco.next.contingency.pix.domain.mapper.core;
 
 import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.FavrDTOWithoutChannel;
+import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.RequestFindRecordDTO;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixFavoredDto;
 import br.com.bradesco.next.contingency.pix.domain.enums.PixAccountTypeEnum;
 import br.com.bradesco.next.contingency.pix.domain.enums.PixFavoredTypeEnum;
 import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationStatusEnum;
 import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationTypeFavoredEnum;
-import org.mapstruct.Mapper;
+import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 
-@Mapper(componentModel = "spring")
-public interface B2bFavoredMapper {
+@Component
+public class B2bFavoredMapper {
 
-    default PixFavoredDto toPixFavoredDto(FavrDTOWithoutChannel source) {
+    public RequestFindRecordDTO toRequest(String keyFavored, String bank, String branch, String account, String channel) {
+        var request = new RequestFindRecordDTO();
+        request.setCtpoCanal(channel);
+        request.setBanco(bank);
+        request.setAgencia(branch);
+        request.setConta(account);
+        request.setChave(keyFavored);
+        return request;
+    }
 
-        if (source == null) {
-            return null;
-        }
+    public PixFavoredDto toPixFavoredDto(FavrDTOWithoutChannel source) {
+        if (source == null) return null;
 
         var target = new PixFavoredDto();
-
         target.setPartition(parseInteger(source.getParticao()));
-
         target.setFavoredCode(parseLong(source.getCodigoFavorecido()));
-
-        /*
-         * ATENÇÃO:
-         *
-         * Estes três são a equivalência mais provável entre
-         * o contrato B2B novo e o DTO legado.
-         *
-         * Recomendo conferir contra o responseToDto() do
-         * BspiFavoredMapper antigo antes do merge.
-         */
-        target.setLegalPersonCodeFavored(
-                parseLong(source.getCcpfCnpjFavorecido())
-        );
-
-        target.setContractTypeCodeFavored(
-                parseInteger(source.getCfilialCnpjFavorecido())
-        );
-
-        target.setContractSequentialNumberFavored(
-                parseLong(source.getCctrlCpfFavorecido())
-        );
-
-        target.setCpfCnpjFavored(
-                buildCpfCnpj(
-                        source.getCcpfCnpjFavorecido(),
-                        source.getCfilialCnpjFavorecido(),
-                        source.getCctrlCpfFavorecido()
-                )
-        );
-
-        target.setIspbCodeFavored(
-                parseInteger(source.getCispbBacenFavorecido())
-        );
-
-        target.setBankFavored(
-                parseInteger(source.getBancoFavorecido())
-        );
-
-        target.setBranchFavored(
-                parseInteger(source.getAgenciaFavorecido())
-        );
-
-        target.setAccountFavored(
-                parseLong(source.getContaFavorecido())
-        );
-
-        target.setDigitFavored(
-                parseInteger(source.getDigitoFavorecido())
-        );
-
-        target.setTypeAccount(
-                mapTypeAccount(source)
-        );
-
+        target.setLegalPersonCodeFavored(defaultLong(source.getCcpfCnpjFavorecido()));
+        target.setContractTypeCodeFavored(defaultInteger(source.getCfilialCnpjFavorecido()));
+        target.setContractSequentialNumberFavored(defaultLong(source.getCctrlCpfFavorecido()));
+        target.setCpfCnpjFavored(buildCpfCnpj(
+                source.getCcpfCnpjFavorecido(),
+                source.getCfilialCnpjFavorecido(),
+                source.getCctrlCpfFavorecido()
+        ));
+        target.setIspbCodeFavored(parseInteger(source.getCispbBacenFavorecido()));
+        target.setBankFavored(parseInteger(source.getBancoFavorecido()));
+        target.setBranchFavored(parseInteger(source.getAgenciaFavorecido()));
+        target.setAccountFavored(parseLong(source.getContaFavorecido()));
+        target.setDigitFavored(parseInteger(source.getDigitoFavorecido()));
+        target.setTypeAccount(mapEnum(source.getTipoConta(), PixAccountTypeEnum.class));
         target.setKey(source.getChave());
-
         target.setName(source.getNome());
-
-        target.setInput(
-                mapInput(source)
-        );
-
-        target.setRegister(
-                mapRegister(source)
-        );
-
-        target.setStartValidityDate(
-                parseLocalDateTime(source.getDataInicioValidade())
-        );
-
-        target.setRegistrationStatus(
-                mapRegistrationStatus(source)
-        );
-
+        target.setInput(mapEnum(source.getEntrada(), PixRegistrationTypeFavoredEnum.class));
+        target.setRegister(mapEnum(source.getCadastro(), PixFavoredTypeEnum.class));
+        target.setStartValidityDate(parseLocalDateTime(source.getDataInicioValidade()));
+        target.setRegistrationStatus(mapEnum(source.getStatusCadastro(), PixRegistrationStatusEnum.class));
         return target;
     }
 
-    default PixAccountTypeEnum mapTypeAccount(
-            FavrDTOWithoutChannel source) {
-
-        if (source.getTipoConta() == null) {
-            return null;
-        }
-
-        try {
-            return PixAccountTypeEnum.valueOf(
-                    source.getTipoConta().name()
-            );
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
+    private Integer parseInteger(String value) {
+        var valueParsed = normalizeNumber(value);
+        return valueParsed == null ? null : Integer.valueOf(valueParsed);
     }
 
-    default PixRegistrationTypeFavoredEnum mapInput(
-            FavrDTOWithoutChannel source) {
-
-        if (source.getEntrada() == null) {
-            return null;
-        }
-
-        try {
-            return PixRegistrationTypeFavoredEnum.valueOf(
-                    source.getEntrada().name()
-            );
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
+    private Long parseLong(String value) {
+        var valueParsed = normalizeNumber(value);
+        return valueParsed == null ? null : Long.valueOf(valueParsed);
     }
 
-    default PixFavoredTypeEnum mapRegister(
-            FavrDTOWithoutChannel source) {
-
-        if (source.getCadastro() == null) {
-            return null;
-        }
-
-        try {
-            return PixFavoredTypeEnum.valueOf(
-                    source.getCadastro().name()
-            );
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
+    private int defaultInteger(String value) {
+        var parsed = parseInteger(value);
+        return parsed == null ? 0 : parsed;
     }
 
-    default PixRegistrationStatusEnum mapRegistrationStatus(
-            FavrDTOWithoutChannel source) {
-
-        if (source.getStatusCadastro() == null) {
-            return null;
-        }
-
-        try {
-            return PixRegistrationStatusEnum.valueOf(
-                    source.getStatusCadastro().name()
-            );
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
+    private long defaultLong(String value) {
+        var parsed = parseLong(value);
+        return parsed == null ? 0L : parsed;
     }
 
-    default Integer parseInteger(String value) {
-
-        if (value == null || value.trim().isEmpty()) {
-            return null;
-        }
-
-        try {
-            return Integer.valueOf(
-                    value.replaceAll("\\D", "")
-            );
-        } catch (NumberFormatException e) {
-            return null;
-        }
+    private String normalizeNumber(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        var result = value.replaceAll("[^0-9]", "");
+        return result.isEmpty() ? null : result;
     }
 
-    default Long parseLong(String value) {
+    private String buildCpfCnpj(String base, String branch, String control) {
+        var normalizedBase = normalizeNumber(base);
+        var normalizedBranch = normalizeNumber(branch);
+        var normalizedControl = normalizeNumber(control);
 
-        if (value == null || value.trim().isEmpty()) {
-            return null;
+        if (normalizedBase == null) return null;
+        if (normalizedBase.length() == 11 || normalizedBase.length() == 14) return normalizedBase;
+        if (normalizedBase.length() == 9) return leftPad(normalizedBase, 9) + leftPad(normalizedControl, 2);
+        if (normalizedBase.length() <= 8) {
+            return leftPad(normalizedBase, 8) + leftPad(normalizedBranch, 4) + leftPad(normalizedControl, 2);
         }
-
-        try {
-            return Long.valueOf(
-                    value.replaceAll("\\D", "")
-            );
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return normalizedBase;
     }
 
-    default String buildCpfCnpj(
-            String codigo,
-            String filial,
-            String controle) {
-
-        if (codigo == null) {
-            return null;
-        }
-
-        StringBuilder result = new StringBuilder(codigo);
-
-        if (filial != null) {
-            result.append(filial);
-        }
-
-        if (controle != null) {
-            result.append(controle);
-        }
-
-        return result.toString();
+    private String leftPad(String value, int size) {
+        var normalized = value == null ? "" : value;
+        if (normalized.length() >= size) return normalized;
+        return String.format("%" + size + "s", normalized).replace(' ', '0');
     }
 
-    default LocalDateTime parseLocalDateTime(String value) {
+    private <T extends Enum<T>> T mapEnum(Enum<?> source, Class<T> targetClass) {
+        if (source == null) return null;
+        return Enum.valueOf(targetClass, source.name());
+    }
 
-        if (value == null || value.trim().isEmpty()) {
-            return null;
-        }
-
-        try {
-            return LocalDateTime.parse(value);
-        } catch (DateTimeParseException ignored) {
-        }
-
-        try {
-            return LocalDateTime.parse(
-                    value,
-                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-            );
-        } catch (DateTimeParseException ignored) {
-        }
-
-        try {
-            return LocalDateTime.parse(
-                    value,
-                    DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
-            );
-        } catch (DateTimeParseException ignored) {
-        }
-
-        return null;
+    private LocalDateTime parseLocalDateTime(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        return LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
     }
 }
 
 
-// ============================================================================
-// 6. PixFavoredService.java - SUBSTITUIR IMPLEMENTAÇÃO ATUAL
-// ============================================================================
-
+// ============================================================
+// PixFavoredService.java
+// ============================================================
 package br.com.bradesco.next.contingency.pix.service;
 
 import br.com.bradesco.next.contingency.pix.b2b.client.contatos.api.ContatosApi;
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.RequestFindRecordDTO;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixFavoredDto;
 import br.com.bradesco.next.contingency.pix.domain.dto.PixSearchRecordFavoredDto;
 import br.com.bradesco.next.contingency.pix.domain.mapper.core.B2bFavoredMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.support.StringBundle;
 import org.springframework.stereotype.Service;
 
-import java.util.ResourceBundle;
-
-import static br.com.bradesco.next.contingency.pix.utils.ApplicationUtils.getCustomerInfo;
-
-// ajuste estes static imports para os mesmos usados no PixKeyValidationService
-import static br.com.bradesco.next.contingency.pix.domain.constants.PixConstants.CHANNEL_ID;
+// manter os mesmos static imports usados no PixKeyValidationService:
+// getCustomerInfo
+// CHANNEL_ID
 
 @Service
 public class PixFavoredService {
 
-    /*
-     * Banco Bradesco.
-     *
-     * Estou deixando local para não depender do nome exato da
-     * constante do seu projeto.
-     *
-     * Se vocês já tiverem INTERNAL_BANK_CODE = "237",
-     * substitua por essa constante.
-     */
     private static final String INTERNAL_BANK_CODE = "237";
 
     @Autowired
@@ -455,285 +243,23 @@ public class PixFavoredService {
     private B2bFavoredMapper b2bFavoredMapper;
 
     @Autowired
-    private ResourceBundle strings;
+    private StringBundle strings;
 
     @Value("${next-contingency-pix.cloud.x-access-token-pix.value}")
     private String xAccessTokenPix;
 
-    public PixFavoredDto searchRecordFavored(
-            PixSearchRecordFavoredDto pixSearchRecordFavoredRequestDto) {
-
+    public PixFavoredDto searchRecordFavored(PixSearchRecordFavoredDto requestDto) {
         var customerInfo = getCustomerInfo(strings);
 
-        var request = new RequestFindRecordDTO();
-
-        /*
-         * Mesmo conceito usado no ChavesApi:
-         *
-         * x-access-token-pix
-         * banco/agência/conta/canal do cliente
-         * chave que está sendo pesquisada
-         */
-
-        request.setCtpoCanal(
+        var request = b2bFavoredMapper.toRequest(
+                requestDto.getKeyFavored(),
+                INTERNAL_BANK_CODE,
+                String.valueOf(customerInfo.getBranch()),
+                String.valueOf(customerInfo.getAccountNumber()),
                 String.valueOf(CHANNEL_ID)
         );
 
-        request.setBanco(
-                INTERNAL_BANK_CODE
-        );
-
-        request.setAgencia(
-                customerInfo.getBranch() != null
-                        ? String.valueOf(customerInfo.getBranch())
-                        : null
-        );
-
-        request.setConta(
-                customerInfo.getAccountNumber() != null
-                        ? String.valueOf(customerInfo.getAccountNumber())
-                        : null
-        );
-
-        request.setChave(
-                pixSearchRecordFavoredRequestDto.getKeyFavored()
-        );
-
-        /*
-         * Os campos abaixo são referentes à busca por dados
-         * específicos do favorecido.
-         *
-         * Como o contrato atual da sua controller recebe apenas
-         * keyFavored, eles devem continuar null.
-         *
-         * O gateway B2B fará a consulta pela chave.
-         */
-        request.setCispbBacenFavorecido(null);
-        request.setAgenciaFavorecido(null);
-        request.setContaFavorecido(null);
-        request.setDigitoFavorecido(null);
-        request.setCodigoFavorecido(null);
-
-        var response = contatosApi.findRecord(
-                xAccessTokenPix,
-                request
-        );
-
+        var response = contatosApi.findRecord(xAccessTokenPix, request);
         return b2bFavoredMapper.toPixFavoredDto(response);
     }
 }
-
-
-// ============================================================================
-// 7. PixFavoredMapper.java
-// ============================================================================
-//
-// MANTER COMO ESTÁ.
-//
-// O seu mapper atual:
-//
-// @Mapper(componentModel = "spring")
-// public interface PixFavoredMapper {
-//
-//     @Mapping(target = "code", ignore = true)
-//     @Mapping(target = "messages", ignore = true)
-//     PixSearchRecordFavoredResponse dtoToResponse(
-//             PixFavoredDto pixFavoredDto
-//     );
-//
-//     PixSearchRecordFavoredDto requestToDto(
-//             PixSearchRecordFavoredRequest request
-//     );
-// }
-//
-// Continua funcionando.
-//
-// Isso é importante porque mantém exatamente o mesmo contrato
-// de response da controller.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 8. PixFavoredController.java
-// ============================================================================
-//
-// CONTINUA ASSIM:
-//
-// public PixSearchRecordFavoredResponse searchRecord(
-//         @RequestHeader(value = X_NEXT_AUTH_ENCRYPT_TOKEN) String token,
-//         @RequestBody PixSearchRecordFavoredRequest request) {
-//
-//     return pixFavoredMapper.dtoToResponse(
-//             pixFavoredService.searchRecordFavored(
-//                     pixFavoredMapper.requestToDto(request)
-//             )
-//     );
-// }
-//
-// Não troca request.
-// Não troca response.
-// Não troca rota.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 9. PixController.java - COUNTRIES
-// ============================================================================
-//
-// CONTINUA:
-//
-// @ApiOperation(value = "Countries")
-// @RequestMapping(
-//         path = COUNTRIES,
-//         method = POST,
-//         produces = APPLICATION_JSON_VALUE
-// )
-// public CountriesResponse getCountries(
-//         @RequestHeader(value = X_NEXT_AUTH_ENCRYPT_TOKEN)
-//         @NotNull String token) {
-//
-//     return countriesMapper.toCountriesResponse(
-//             pixCountriesService.queryCountries()
-//     );
-// }
-//
-// Ou exatamente a versão que já existe hoje.
-//
-// NÃO expor CountryRootResponse.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 10. PixService.java - AVAILABILITY
-// ============================================================================
-//
-// NÃO ALTERAR.
-//
-// Continua usando:
-//
-// verifyTransactionAvailability()
-// getSearchDateTimeResponse()
-// findTransactionTimeRestriction()
-// findTimeRestrictionInSpecificDays()
-// findTimeRestrictionInPeriods()
-// verifyTimeWithinAllowedLimit()
-//
-// Esse fluxo NÃO precisa usar gateway B2B.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 11. CLASSES ANTIGAS QUE DEIXAM DE SER USADAS NESTES DOIS FLUXOS
-// ============================================================================
-//
-// COUNTRIES:
-//
-// BspiEngClient                         -> não usar em queryCountries()
-// BspiCountriesMapper                  -> não usar em queryCountries()
-// BspiCountriesResponse                -> não usar
-//
-//
-// FAVORED:
-//
-// BspiFavoredService                   -> deixa de ser chamado
-// BspiApiFavoredEngClient              -> deixa de ser chamado
-// BspiFavoredMapper                    -> deixa de ser chamado
-// BspiFavoredResponse                  -> deixa de ser usado
-//
-//
-// IMPORTANTE:
-//
-// Eu NÃO apagaria essas classes agora.
-//
-// Primeiro faria a migração, testes e busca por usages.
-//
-// Depois, se realmente ficarem com 0 usages, aí sim removeria.
-//
-// ============================================================================
-
-
-// ============================================================================
-// 12. FLUXO FINAL
-// ============================================================================
-//
-// COUNTRIES:
-//
-// POST /v1/pix/countries
-//
-// PixController
-//      |
-//      v
-// PixCountriesService
-//      |
-//      v
-// ListaDePaisesApi.callList()
-//      |
-//      v
-// CountryRootResponse
-//      |
-//      v
-// B2bCountriesMapper
-//      |
-//      v
-// PixCountriesDto
-//      |
-//      v
-// CountriesMapper
-//      |
-//      v
-// CountriesResponse
-//
-//
-// ---------------------------------------------------------------------------
-//
-// FAVORED:
-//
-// POST /v1/pix/favored/search/record
-//
-// PixFavoredController
-//      |
-//      v
-// PixFavoredMapper.requestToDto()
-//      |
-//      v
-// PixFavoredService
-//      |
-//      +--> getCustomerInfo(strings)
-//      |
-//      +--> RequestFindRecordDTO
-//      |
-//      v
-// ContatosApi.findRecord(
-//      xAccessTokenPix,
-//      request
-// )
-//      |
-//      v
-// FavrDTOWithoutChannel
-//      |
-//      v
-// B2bFavoredMapper
-//      |
-//      v
-// PixFavoredDto
-//      |
-//      v
-// PixFavoredMapper.dtoToResponse()
-//      |
-//      v
-// PixSearchRecordFavoredResponse
-//
-//
-// ---------------------------------------------------------------------------
-//
-// AVAILABILITY:
-//
-// POST /v1/pix/transaction/availability
-//
-// permanece 100% como está.
-//
-// ============================================================================
