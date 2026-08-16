@@ -1,345 +1,1059 @@
 // ============================================================================
-// PixCountriesService.java
-// CORREÇÃO: validar response/lista antes de chamar isEmpty()
+// 1) PixPaymentService.java
+// ============================================================================
+//
+// ADICIONE O PaymentApiClient NA CLASSE:
+//
+// @Autowired
+// private PaymentApiClient paymentApiClient;
+//
+// MANTENHA:
+// @Autowired
+// private BspiMapper bspiMapper;
+//
+// @Autowired
+// private BspiPaymentValidationMapper bspiPaymentValidationMapper;
+//
+// @Autowired
+// private StringBundle strings;
+//
+// NÃO REMOVA AINDA bspiEffectiveLaunchEngClient,
+// porque o submitPix ainda usa confirmPaymentV4.
 // ============================================================================
 
-package br.com.bradesco.next.contingency.pix.service;
 
-import br.com.bradesco.next.common.strings.StringBundle;
-import br.com.bradesco.next.common.web.exception.UnprocessableEntityException;
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.api.ListaDePaisesApi;
-import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
-import br.com.bradesco.next.contingency.pix.domain.mapper.core.b2b.B2bCountriesMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.stereotype.Service;
+public PixTransactionDto pixPaymentValidation(PixPaymentDto pixPaymentValidationDto) {
 
-import static br.com.bradesco.next.contingency.pix.domain.enums.PixError.PIX_COUNTRIES_EMPTY_LIST;
+    sameOwnershipValidation(pixPaymentValidationDto);
+    validateKeyEvp(pixPaymentValidationDto);
 
-@Service
-public class PixCountriesService {
+    var appInfo = getAppInfo(strings);
 
-    private static final Logger LOG = LoggerFactory.getLogger(PixCountriesService.class);
-    private static final String COUNTRIES_CACHE_CATEGORY = "countries";
+    PaymentRequestDTOV2 paymentRequest =
+            bspiPaymentValidationMapper.toPaymentRequestDTOV2(
+                    pixPaymentValidationDto,
+                    appInfo.getCustomer()
+            );
 
-    @Autowired
-    private ListaDePaisesApi listaDePaisesApi;
+    BspiPaymentV2Builder requestBuilder =
+            new BspiPaymentV2Builder(paymentRequest);
 
-    @Autowired
-    private B2bCountriesMapper b2bCountriesMapper;
+    BspiPaymentIntentionV2Builder response =
+            paymentApiClient.intentionPaymentV3(
+                    bspiMapper.createHeader(appInfo),
+                    getBspiDeviceData(),
+                    requestBuilder
+            );
 
-    @Autowired
-    private StringBundle strings;
+    return bspiPaymentValidationMapper.toPixTransactionDto(
+            response.getWrapped(),
+            pixPaymentValidationDto
+    );
+}
 
-    @Cacheable(value = COUNTRIES_CACHE_CATEGORY)
-    public PixCountriesDto queryCountries() {
-        var response = listaDePaisesApi.callList();
 
-        if (response == null || response.getListaPaises() == null || response.getListaPaises().isEmpty()) {
-            LOG.error("Countries list is empty or null.");
-            throw new UnprocessableEntityException(
-                    PIX_COUNTRIES_EMPTY_LIST.getCode(),
-                    PIX_COUNTRIES_EMPTY_LIST,
-                    strings
+// ============================================================================
+// 2) BspiPaymentValidationMapper.java
+// ============================================================================
+//
+// COLE OS MÉTODOS ABAIXO DENTRO DO BspiPaymentValidationMapper EXISTENTE.
+//
+// NÃO CRIE OUTRO @Mapper.
+// NÃO APAGUE OS MÉTODOS ANTIGOS.
+// O submitPix ainda utiliza parte deles.
+//
+// IMPORTS QUE O INTELLIJ VAI PEDIR:
+//
+// PaymentRequestDTOV2
+// IntencaoResponseV2
+// IntencaoOnlineResponse
+// InfoIntencaoOnline
+// ChaveDTO
+// DebitoDTO
+// CreditoDTO
+// LiopDTO
+// CafdDTOV2
+// Limite
+// BspiPaymentV2Builder
+// BspiPaymentIntentionV2Builder
+// PaymentApiClient
+// BeanUtils
+// RoundingMode
+// BigDecimal
+// ArrayList
+// Collections
+// List
+//
+// Use ALT+ENTER para pegar exatamente os packages do seu projeto.
+// ============================================================================
+
+
+public PaymentRequestDTOV2 toPaymentRequestDTOV2(
+        PixPaymentDto dto,
+        CustomerInfo customerInfo) {
+
+    PaymentRequestDTOV2 request = new PaymentRequestDTOV2();
+
+    // ------------------------------------------------------------------------
+    // DADOS BÁSICOS
+    // ------------------------------------------------------------------------
+
+    request.setCanal(String.valueOf(CHANNEL_ID));
+
+    // Endpoint atual é validação/intenção online.
+    request.setTipoExecucao(
+            PaymentRequestDTOV2.TipoExecucaoEnum.O
+    );
+
+    // ------------------------------------------------------------------------
+    // TIPO DE INICIAÇÃO
+    //
+    // PixInputMethodEnum possui codeInd:
+    // MANU / DICT / QRES / QRDN / ...
+    // ------------------------------------------------------------------------
+
+    if (dto.getInputMethod() != null &&
+            dto.getInputMethod().getCodeInd() != null) {
+
+        request.setTipoIniciacao(
+                PaymentRequestDTOV2.TipoIniciacaoEnum.fromValue(
+                        dto.getInputMethod().getCodeInd()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // FINALIDADE DA TRANSAÇÃO
+    //
+    // IPAY / OTHR / GSCB
+    // ------------------------------------------------------------------------
+
+    if (dto.getPixTransPurposeEnum() != null) {
+
+        request.setFinalidadeTransacao(
+                PaymentRequestDTOV2.FinalidadeTransacaoEnum.fromValue(
+                        dto.getPixTransPurposeEnum().getValue()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // VALOR
+    // ------------------------------------------------------------------------
+
+    if (dto.getTransactionAmount() != null) {
+
+        request.setValor(
+                dto.getTransactionAmount()
+                        .setScale(2, RoundingMode.HALF_UP)
+                        .toPlainString()
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // DESCRIÇÃO
+    // ------------------------------------------------------------------------
+
+    request.setDescricao(dto.getDescription());
+
+    // ------------------------------------------------------------------------
+    // E2E
+    //
+    // No contrato atual do contingency, confirmationCode é o identificador
+    // de 32 caracteres utilizado na validação.
+    // ------------------------------------------------------------------------
+
+    request.setE2e(dto.getConfirmationCode());
+
+    // ------------------------------------------------------------------------
+    // CHAVE PIX
+    // ------------------------------------------------------------------------
+
+    request.setChave(
+            createPaymentChave(dto)
+    );
+
+    // ------------------------------------------------------------------------
+    // CONTA DO DEBITADO
+    // ------------------------------------------------------------------------
+
+    request.setDebito(
+            createPaymentDebito(
+                    dto,
+                    customerInfo
+            )
+    );
+
+    // ------------------------------------------------------------------------
+    // CONTA DO CREDITADO
+    // ------------------------------------------------------------------------
+
+    request.setCredito(
+            createPaymentCredito(dto)
+    );
+
+    // ------------------------------------------------------------------------
+    // LIOP
+    // ------------------------------------------------------------------------
+
+    request.setLiop(
+            createPaymentLiop(dto)
+    );
+
+    // ------------------------------------------------------------------------
+    // CAFD
+    // ------------------------------------------------------------------------
+
+    request.setCafd(
+            createPaymentCafd(
+                    dto.getCafdConfirmationDto()
+            )
+    );
+
+    // ------------------------------------------------------------------------
+    // RECURSOS QUE NÃO SÃO UTILIZADOS POR ESTE ENDPOINT LEGADO
+    // ------------------------------------------------------------------------
+
+    request.setUtilizaCartaoCredito(Boolean.FALSE);
+    request.setUtilizaBiometria(Boolean.FALSE);
+
+    return request;
+}
+
+
+// ============================================================================
+// CHAVE PIX
+// ============================================================================
+
+private ChaveDTO createPaymentChave(PixPaymentDto dto) {
+
+    if (dto.getRecipientKeyType() == null ||
+            PixNumericKeyTypeEnum.BRANCH_ACCOUNT.equals(
+                    dto.getRecipientKeyType()
+            )) {
+
+        return null;
+    }
+
+    ChaveDTO chave = new ChaveDTO();
+
+    switch (dto.getRecipientKeyType()) {
+
+        case EMAIL:
+
+            chave.setTipo(
+                    ChaveDTO.TipoEnum.EMAIL
+            );
+
+            break;
+
+        case PHONE:
+
+            chave.setTipo(
+                    ChaveDTO.TipoEnum.CELULAR
+            );
+
+            break;
+
+        case CPF_CNPJ:
+
+            chave.setTipo(
+                    ChaveDTO.TipoEnum.CPF_CNPJ
+            );
+
+            break;
+
+        case EVP:
+
+            chave.setTipo(
+                    ChaveDTO.TipoEnum.EVP
+            );
+
+            break;
+
+        default:
+
+            return null;
+    }
+
+    chave.setValor(
+            dto.getRecipientKey()
+    );
+
+    return chave;
+}
+
+
+// ============================================================================
+// CONTA DO DEBITADO
+// ============================================================================
+
+private DebitoDTO createPaymentDebito(
+        PixPaymentDto dto,
+        CustomerInfo customerInfo) {
+
+    DebitoDTO debito = new DebitoDTO();
+
+    // Mesmos dados que o mapper antigo colocava no
+    // BspiEffectiveLaunchV4Request.
+
+    debito.setIspb(
+            String.valueOf(INTERNAL_BANK_ISPB)
+    );
+
+    debito.setBanco(
+            String.valueOf(INTERNAL_BANK_CODE)
+    );
+
+    if (customerInfo != null) {
+
+        if (customerInfo.getBranch() != null) {
+
+            debito.setAgencia(
+                    String.valueOf(
+                            customerInfo.getBranch()
+                    )
             );
         }
 
-        return b2bCountriesMapper.toPixCountriesDto(response);
-    }
-}
+        if (customerInfo.getAccountNumber() != null) {
 
+            debito.setConta(
+                    String.valueOf(
+                            customerInfo.getAccountNumber()
+                    )
+            );
 
-// ============================================================================
-// PixCountriesServiceTest.java
-// ============================================================================
-
-package br.com.bradesco.next.contingency.pix.service;
-
-import br.com.bradesco.next.common.strings.StringBundle;
-import br.com.bradesco.next.common.web.exception.UnprocessableEntityException;
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.api.ListaDePaisesApi;
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryResponse;
-import br.com.bradesco.next.contingency.pix.b2b.client.listagens.model.CountryRootResponse;
-import br.com.bradesco.next.contingency.pix.domain.dto.PixCountriesDto;
-import br.com.bradesco.next.contingency.pix.domain.mapper.core.b2b.B2bCountriesMapper;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.Test;
-
-import java.util.ArrayList;
-import java.util.Collections;
-
-import static org.mockito.Mockito.*;
-import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertSame;
-
-public class PixCountriesServiceTest {
-
-    @InjectMocks
-    private PixCountriesService pixCountriesService;
-
-    @Mock
-    private ListaDePaisesApi listaDePaisesApi;
-
-    @Mock
-    private B2bCountriesMapper b2bCountriesMapper;
-
-    @Mock
-    private StringBundle strings;
-
-    @BeforeMethod
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
+            debito.setDigitoConta(
+                    getAccountDigit(
+                            customerInfo.getAccountNumber()
+                    )
+            );
+        }
     }
 
-    @Test
-    public void testQueryCountries() {
-        var response = getCountryRootResponse();
-        var expected = new PixCountriesDto();
+    // ------------------------------------------------------------------------
+    // TIPO DA CONTA DO PAGADOR
+    // ------------------------------------------------------------------------
 
-        when(listaDePaisesApi.callList()).thenReturn(response);
-        when(b2bCountriesMapper.toPixCountriesDto(response)).thenReturn(expected);
+    if (dto.getSenderAccountType() != null) {
 
-        var result = pixCountriesService.queryCountries();
+        switch (dto.getSenderAccountType()) {
 
-        assertNotNull(result);
-        assertSame(result, expected);
-        verify(listaDePaisesApi, times(1)).callList();
-        verify(b2bCountriesMapper, times(1)).toPixCountriesDto(response);
+            case CURRENT:
+
+                debito.setTipoConta(
+                        DebitoDTO.TipoContaEnum.CACC
+                );
+
+                break;
+
+            case SAVING:
+
+                debito.setTipoConta(
+                        DebitoDTO.TipoContaEnum.SVGS
+                );
+
+                break;
+
+            default:
+                break;
+        }
     }
 
-    @Test(expectedExceptions = UnprocessableEntityException.class)
-    public void testQueryCountriesResponseNull() {
-        when(listaDePaisesApi.callList()).thenReturn(null);
-        pixCountriesService.queryCountries();
-    }
+    // ------------------------------------------------------------------------
+    // NOME DO PAGADOR
+    //
+    // O mapper antigo também buscava o BankingCustomer para preencher
+    // senderName.
+    // ------------------------------------------------------------------------
 
-    @Test(expectedExceptions = UnprocessableEntityException.class)
-    public void testQueryCountriesListNull() {
-        var response = new CountryRootResponse();
-        response.setListaPaises(null);
+    try {
 
-        when(listaDePaisesApi.callList()).thenReturn(response);
+        var bankingCustomer =
+                customerService.findBankingCustomer();
 
-        pixCountriesService.queryCountries();
-    }
+        if (bankingCustomer != null) {
 
-    @Test(expectedExceptions = UnprocessableEntityException.class)
-    public void testQueryCountriesEmptyList() {
-        var response = new CountryRootResponse();
-        response.setListaPaises(Collections.emptyList());
-
-        when(listaDePaisesApi.callList()).thenReturn(response);
-
-        pixCountriesService.queryCountries();
-    }
-
-    @Test
-    public void testMapperNotCalledWhenCountriesInvalid() {
-        var response = new CountryRootResponse();
-        response.setListaPaises(new ArrayList<>());
-
-        when(listaDePaisesApi.callList()).thenReturn(response);
-
-        try {
-            pixCountriesService.queryCountries();
-        } catch (UnprocessableEntityException ignored) {
+            debito.setNome(
+                    truncateToMaxChars(
+                            bankingCustomer.getName(),
+                            KEY_CREATION_TRUNCATE_SENDERNAME
+                    )
+            );
         }
 
-        verify(b2bCountriesMapper, never()).toPixCountriesDto(any());
+    } catch (RuntimeException ignored) {
+
+        // Não quebra a montagem da intenção por causa do nome.
     }
 
-    private CountryRootResponse getCountryRootResponse() {
-        var country = new CountryResponse();
-        country.setDdi("55");
-        country.setNome("Brasil");
+    return debito;
+}
 
-        var response = new CountryRootResponse();
-        response.setListaPaises(Collections.singletonList(country));
-        return response;
+
+// ============================================================================
+// CONTA DO CREDITADO
+// ============================================================================
+
+private CreditoDTO createPaymentCredito(
+        PixPaymentDto dto) {
+
+    CreditoDTO credito = new CreditoDTO();
+
+    // ------------------------------------------------------------------------
+    // ISPB
+    // ------------------------------------------------------------------------
+
+    if (dto.getRecipientIspbCode() != null) {
+
+        credito.setIspb(
+                getFormattedIspb(
+                        dto.getRecipientIspbCode()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // AGÊNCIA
+    // ------------------------------------------------------------------------
+
+    if (dto.getRecipientBranch() != null) {
+
+        credito.setAgencia(
+                String.valueOf(
+                        dto.getRecipientBranch()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // CONTA
+    // ------------------------------------------------------------------------
+
+    if (dto.getRecipientAccount() != null) {
+
+        credito.setConta(
+                String.valueOf(
+                        dto.getRecipientAccount()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // DÍGITO DA CONTA
+    // ------------------------------------------------------------------------
+
+    if (dto.getRecipientAccountDigit() != null) {
+
+        credito.setDigitoConta(
+                String.valueOf(
+                        dto.getRecipientAccountDigit()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // NOME DO RECEBEDOR
+    // ------------------------------------------------------------------------
+
+    if (dto.getRecipientName() != null) {
+
+        credito.setNome(
+                truncateToMaxChars(
+                        dto.getRecipientName(),
+                        KEY_CREATION_TRUNCATE_RECIPIENT_NAME
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // TIPO DA CONTA DO RECEBEDOR
+    //
+    // CURRENT         -> CACC
+    // SAVING          -> SVGS
+    // PAYMENT_ACCOUNT -> TRAN
+    // ------------------------------------------------------------------------
+
+    if (dto.getRecipientAccountType() != null) {
+
+        switch (dto.getRecipientAccountType()) {
+
+            case CURRENT:
+
+                credito.setTipoConta(
+                        CreditoDTO.TipoContaEnum.CACC
+                );
+
+                break;
+
+            case SAVING:
+
+                credito.setTipoConta(
+                        CreditoDTO.TipoContaEnum.SVGS
+                );
+
+                break;
+
+            case PAYMENT_ACCOUNT:
+
+                credito.setTipoConta(
+                        CreditoDTO.TipoContaEnum.TRAN
+                );
+
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    return credito;
+}
+
+
+// ============================================================================
+// LIOP
+// ============================================================================
+
+private LiopDTO createPaymentLiop(
+        PixPaymentDto dto) {
+
+    LiopDTO liop = new LiopDTO();
+
+    liop.setCanal(
+            String.valueOf(CHANNEL_ID)
+    );
+
+    if (dto.getInputMethod() != null) {
+
+        if (dto.getInputMethod().getLimitServiceCode() != null) {
+
+            liop.setServico(
+                    String.valueOf(
+                            dto.getInputMethod()
+                                    .getLimitServiceCode()
+                    )
+            );
+        }
+
+        if (dto.getInputMethod().getMagicLimitServiceCode() != null) {
+
+            liop.setServicoRetirada(
+                    String.valueOf(
+                            dto.getInputMethod()
+                                    .getMagicLimitServiceCode()
+                    )
+            );
+        }
+    }
+
+    return liop;
+}
+
+
+// ============================================================================
+// CAFD
+// ============================================================================
+
+private CafdDTOV2 createPaymentCafd(
+        CafdConfirmationDto dto) {
+
+    CafdDTOV2 cafd = new CafdDTOV2();
+
+    cafd.setCanal(
+            String.valueOf(CHANNEL_ID)
+    );
+
+    // ------------------------------------------------------------------------
+    // É INTENÇÃO/VALIDAÇÃO.
+    //
+    // Mesmo comportamento que o mapper antigo:
+    //
+    // request.setCodeA(EMPTY_STRING);
+    // request.setCafdProtocolNumber(BigDecimal.ZERO.toString());
+    // ------------------------------------------------------------------------
+
+    cafd.setCodigoA(
+            EMPTY_STRING
+    );
+
+    cafd.setNumProtocoloCafd(
+            BigDecimal.ZERO.toString()
+    );
+
+    if (dto == null) {
+        return cafd;
+    }
+
+    cafd.setAgenteUsuario(
+            dto.getUserAgent()
+    );
+
+    cafd.setCodSessao(
+            dto.getSessionCode()
+    );
+
+    cafd.setEnderecoIp(
+            dto.getIpAddress()
+    );
+
+    cafd.setPortaIp(
+            dto.getIpPort()
+    );
+
+    cafd.setFormaAcesso(
+            dto.getAccessForm()
+    );
+
+    cafd.setIdentEquipam(
+            dto.getEquipmentIdentification()
+    );
+
+    cafd.setIdentRegDispos(
+            dto.getIdentRegDevice()
+    );
+
+    cafd.setIdentVirtHard(
+            dto.getIdentVirtHard()
+    );
+
+    cafd.setLatitude(
+            dto.getLatitude()
+    );
+
+    cafd.setLongitude(
+            dto.getLongitude()
+    );
+
+    cafd.setModDispositivo(
+            dto.getModelDevice()
+    );
+
+    cafd.setNomeUsuario(
+            dto.getUserName()
+    );
+
+    cafd.setPlataforma(
+            dto.getPlatform()
+    );
+
+    return cafd;
+}
+
+
+// ============================================================================
+// RESPONSE
+//
+// IntencaoResponseV2
+//          |
+//          +-- online
+//                |
+//                +-- info
+//
+// InfoIntencaoOnline:
+// codigoA
+// protocoloCafd
+// e2e
+// tarifa
+// transacaoDuplicada
+// saldo
+// liop
+// limite
+// limites
+// suspeitaFraude
+// ============================================================================
+
+public PixTransactionDto toPixTransactionDto(
+        IntencaoResponseV2 response,
+        PixPaymentDto pixPaymentDto) {
+
+    if (response == null ||
+            response.getOnline() == null ||
+            response.getOnline().getInfo() == null) {
+
+        throw new UnprocessableEntityException(
+                PIX_GENERAL_ERROR.getCode(),
+                PIX_GENERAL_ERROR,
+                strings
+        );
+    }
+
+    InfoIntencaoOnline info =
+            response.getOnline().getInfo();
+
+    PixTransactionDto dto =
+            new PixTransactionDto();
+
+    // ------------------------------------------------------------------------
+    // DADOS ORIGINAIS DA TRANSAÇÃO
+    //
+    // No mapper antigo boa parte desses campos também vinha do
+    // PixPaymentDto e não diretamente da resposta do core.
+    // ------------------------------------------------------------------------
+
+    dto.setRecipientName(
+            pixPaymentDto.getRecipientName()
+    );
+
+    dto.setRecipientCpfCnpj(
+            getPaymentRecipientCpfCnpj(
+                    pixPaymentDto
+            )
+    );
+
+    dto.setRecipientBank(
+            pixPaymentDto.getRecipientBank()
+    );
+
+    dto.setRecipientKey(
+            pixPaymentDto.getRecipientKey()
+    );
+
+    dto.setDescription(
+            pixPaymentDto.getDescription()
+    );
+
+    dto.setAmount(
+            pixPaymentDto.getTransactionAmount()
+    );
+
+    dto.setRecipientAccount(
+            pixPaymentDto.getRecipientAccount()
+    );
+
+    dto.setRecipientBranch(
+            pixPaymentDto.getRecipientBranch()
+    );
+
+    dto.setSameOwnership(
+            pixPaymentDto.getSameOwnership()
+    );
+
+    dto.setPixTransPurposeEnum(
+            pixPaymentDto.getPixTransPurposeEnum()
+    );
+
+    // ------------------------------------------------------------------------
+    // TIPO DA CONTA DO RECEBEDOR
+    // ------------------------------------------------------------------------
+
+    if (pixPaymentDto.getRecipientAccountType() != null) {
+
+        dto.setRecipientAccountType(
+                getPixRecipientAccountType(
+                        pixPaymentDto.getRecipientAccountType()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // E2E RETORNADO PELO NOVO GATEWAY
+    // ------------------------------------------------------------------------
+
+    dto.setConfirmationCode(
+            info.getE2e()
+    );
+
+    // ------------------------------------------------------------------------
+    // INTERNAL CODE
+    //
+    // O contrato externo NÃO MUDA.
+    //
+    // Antes o mapper criava o internalCode através de:
+    //
+    // cafdProtocolNumber + codeA
+    //
+    // Agora fazemos exatamente a mesma coisa usando:
+    //
+    // protocoloCafd + codigoA
+    // ------------------------------------------------------------------------
+
+    String protocoloCafd =
+            info.getProtocoloCafd() != null
+                    ? String.valueOf(
+                            info.getProtocoloCafd()
+                    )
+                    : BigDecimal.ZERO.toString();
+
+    String codigoA =
+            info.getCodigoA() != null
+                    ? info.getCodigoA().getValue()
+                    : EMPTY_STRING;
+
+    dto.setInternalCode(
+            encodeInternalCode(
+                    protocoloCafd,
+                    codigoA
+            )
+    );
+
+    // ------------------------------------------------------------------------
+    // TARIFA
+    // ------------------------------------------------------------------------
+
+    if (info.getTarifa() != null &&
+            !info.getTarifa().trim().isEmpty()) {
+
+        try {
+
+            dto.setBankFeeAmount(
+                    new BigDecimal(
+                            info.getTarifa()
+                                    .replace(",", ".")
+                    )
+            );
+
+        } catch (NumberFormatException ignored) {
+
+            dto.setBankFeeAmount(
+                    BigDecimal.ZERO
+            );
+        }
+
+    } else {
+
+        dto.setBankFeeAmount(
+                BigDecimal.ZERO
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // USO DE LIMITE
+    // ------------------------------------------------------------------------
+
+    if (info.getLimite() != null) {
+
+        dto.setUsesLimitInPaymentEnum(
+                PixUseLimitInPaymentEnum.getByExternalCode(
+                        info.getLimite()
+                )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // LISTA DE LIMITES
+    // ------------------------------------------------------------------------
+
+    dto.setLimits(
+            getPixUsedLimitsV3(
+                    info.getLimites()
+            )
+    );
+
+    // ------------------------------------------------------------------------
+    // A API /v3/intencoes QUE VOCÊ MOSTROU NÃO RETORNA NSU.
+    //
+    // NÃO VAMOS INVENTAR confirmationNumber.
+    // ------------------------------------------------------------------------
+
+    dto.setConfirmationNumber(
+            null
+    );
+
+    // ------------------------------------------------------------------------
+    // Fluxo de intenção normal.
+    // ------------------------------------------------------------------------
+
+    dto.setAwaitingAnalysis(
+            Boolean.FALSE
+    );
+
+    return dto;
+}
+
+
+// ============================================================================
+// LIMITES
+//
+// Como a classe "Limite" gerada pelo gateway novo e o PixUsedLimitDto
+// pertencem a contratos diferentes, usamos BeanUtils para copiar todos os
+// campos de mesmo nome.
+//
+// Isso evita amarrar essa migração à implementação do client gerado.
+// ============================================================================
+
+private List<PixUsedLimitDto> getPixUsedLimitsV3(
+        List<Limite> limites) {
+
+    if (limites == null ||
+            limites.isEmpty()) {
+
+        return Collections.emptyList();
+    }
+
+    List<PixUsedLimitDto> result =
+            new ArrayList<>();
+
+    for (Limite limite : limites) {
+
+        if (limite == null) {
+            continue;
+        }
+
+        PixUsedLimitDto target =
+                new PixUsedLimitDto();
+
+        BeanUtils.copyProperties(
+                limite,
+                target
+        );
+
+        result.add(
+                target
+        );
+    }
+
+    return result;
+}
+
+
+// ============================================================================
+// INTERNAL CODE
+//
+// SE ESSE MÉTODO JÁ EXISTE NO SEU BspiPaymentValidationMapper,
+// NÃO DUPLIQUE.
+//
+// DEIXEI AQUI SOMENTE PARA A IMPLEMENTAÇÃO FICAR COMPLETA.
+// ============================================================================
+
+private String encodeInternalCode(
+        String cafdProtocolNumber,
+        String codeA) {
+
+    try {
+
+        Map<String, String> elements =
+                new HashMap<>();
+
+        elements.put(
+                CAFD_PROTOCOL,
+                cafdProtocolNumber
+        );
+
+        elements.put(
+                INTERNAL_CODE,
+                codeA
+        );
+
+        String json =
+                writeJava8ValueAsString(
+                        elements
+                );
+
+        return encryptionService.encryptDaily(
+                json
+        );
+
+    } catch (JsonProcessingException e) {
+
+        LOG.info(
+                "Error while encode internal code",
+                e
+        );
+
+        return EMPTY_STRING;
     }
 }
 
 
 // ============================================================================
-// B2bFavoredMapperTest.java
+// IMPORTS NOVOS - REFERÊNCIA
 //
-// IMPORTANTE:
-// Os 3 campos abaixo não existem mais no novo gateway B2B:
-// legalPersonCodeFavored
-// contractTypeCodeFavored
-// contractSequentialNumberFavored
+// NÃO USE "*".
+// DEIXE O INTELLIJ RESOLVER O PACKAGE EXATO DOS BUILDERS.
 //
-// Portanto NÃO devemos esperar que o mapper invente valores para eles.
+// Os modelos que você mostrou ficam no package:
+//
+// br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model
+//
+// Exemplo:
+//
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.CafdDTOV2;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.ChaveDTO;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.CreditoDTO;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.DebitoDTO;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.InfoIntencaoOnline;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.IntencaoResponseV2;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.Limite;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.LiopDTO;
+// import br.com.bradesco.next.contingency.pix.b2b.client.pagamentos.model.PaymentRequestDTOV2;
+//
+// import java.math.BigDecimal;
+// import java.math.RoundingMode;
+// import java.util.ArrayList;
+// import java.util.Collections;
+// import java.util.HashMap;
+// import java.util.List;
+// import java.util.Map;
+//
+// import org.springframework.beans.BeanUtils;
+//
 // ============================================================================
-
-package br.com.bradesco.next.contingency.pix.domain.mapper.core.b2b;
-
-import br.com.bradesco.next.contingency.pix.b2b.client.contatos.model.FavrDTOWithoutChannel;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixAccountTypeEnum;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixFavoredTypeEnum;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationStatusEnum;
-import br.com.bradesco.next.contingency.pix.domain.enums.PixRegistrationTypeFavoredEnum;
-import org.mapstruct.factory.Mappers;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.Test;
-
-import java.time.LocalDateTime;
-
-import static org.testng.Assert.*;
-
-public class B2bFavoredMapperTest {
-
-    private B2bFavoredMapper b2bFavoredMapper;
-
-    @BeforeMethod
-    public void setUp() {
-        b2bFavoredMapper = Mappers.getMapper(B2bFavoredMapper.class);
-    }
-
-    @Test
-    public void testResponseToDto() {
-        var response = getFavoredResponse();
-
-        var result = b2bFavoredMapper.responseToDto(response);
-
-        assertNotNull(result);
-        assertEquals(result.getPartition(), Integer.valueOf(161));
-        assertEquals(result.getFavoredCode(), 1L);
-
-        /*
-         * Não possuem equivalente no novo FavrDTOWithoutChannel.
-         * Se o tipo no PixFavoredDto for wrapper, o valor será null.
-         * Não force 0 no teste.
-         */
-        assertNull(result.getContractTypeCodeFavored());
-
-        assertEquals(result.getCpfCnpjFavored(), "718299921");
-        assertEquals(result.getIspbCodeFavored(), Integer.valueOf(60746948));
-        assertEquals(result.getBankFavored(), Integer.valueOf(0));
-        assertEquals(result.getBranchFavored(), Integer.valueOf(0));
-        assertEquals(result.getAccountFavored(), Long.valueOf(0));
-        assertEquals(result.getDigitFavored(), Integer.valueOf(0));
-
-        assertEquals(result.getTypeAccount(), PixAccountTypeEnum.fromValue("CACC"));
-        assertEquals(result.getKey(), "71829992180");
-        assertEquals(result.getName(), "FULANO BELTRANO DA SILVA PERFIL NOVO");
-        assertEquals(result.getInput(), PixRegistrationTypeFavoredEnum.fromValue("CPF_CNPJ"));
-        assertEquals(result.getRegister(), PixFavoredTypeEnum.fromValue("FAVORITO"));
-        assertEquals(result.getRegistrationStatus(), PixRegistrationStatusEnum.fromValue("ATIVO"));
-        assertEquals(
-                result.getStartValidityDate(),
-                LocalDateTime.parse("2026-08-14T17:08:15.061")
-        );
-    }
-
-    @Test
-    public void testResponseToDtoNull() {
-        assertNull(b2bFavoredMapper.responseToDto(null));
-    }
-
-    @Test
-    public void testResponseToDtoWithNullEnumsAndDate() {
-        var response = new FavrDTOWithoutChannel();
-
-        var result = b2bFavoredMapper.responseToDto(response);
-
-        assertNotNull(result);
-        assertNull(result.getTypeAccount());
-        assertNull(result.getInput());
-        assertNull(result.getRegister());
-        assertNull(result.getRegistrationStatus());
-        assertNull(result.getStartValidityDate());
-    }
-
-    @Test
-    public void testResponseToDtoWithBlankDate() {
-        var response = new FavrDTOWithoutChannel();
-        response.setDataInicioValidade(" ");
-
-        var result = b2bFavoredMapper.responseToDto(response);
-
-        assertNotNull(result);
-        assertNull(result.getStartValidityDate());
-    }
-
-    @Test
-    public void testTipoContaMapping() {
-        assertEquals(
-                b2bFavoredMapper.map(FavrDTOWithoutChannel.TipoContaEnum.CACC),
-                PixAccountTypeEnum.fromValue("CACC")
-        );
-        assertNull(b2bFavoredMapper.map((FavrDTOWithoutChannel.TipoContaEnum) null));
-    }
-
-    @Test
-    public void testEntradaMapping() {
-        assertEquals(
-                b2bFavoredMapper.map(FavrDTOWithoutChannel.EntradaEnum.CPF_CNPJ),
-                PixRegistrationTypeFavoredEnum.fromValue("CPF_CNPJ")
-        );
-        assertNull(b2bFavoredMapper.map((FavrDTOWithoutChannel.EntradaEnum) null));
-    }
-
-    @Test
-    public void testCadastroMapping() {
-        assertEquals(
-                b2bFavoredMapper.map(FavrDTOWithoutChannel.CadastroEnum.FAVORITO),
-                PixFavoredTypeEnum.fromValue("FAVORITO")
-        );
-        assertNull(b2bFavoredMapper.map((FavrDTOWithoutChannel.CadastroEnum) null));
-    }
-
-    @Test
-    public void testStatusCadastroMapping() {
-        assertEquals(
-                b2bFavoredMapper.map(FavrDTOWithoutChannel.StatusCadastroEnum.ATIVO),
-                PixRegistrationStatusEnum.fromValue("ATIVO")
-        );
-        assertNull(b2bFavoredMapper.map((FavrDTOWithoutChannel.StatusCadastroEnum) null));
-    }
-
-    @Test
-    public void testDateMapping() {
-        assertEquals(
-                b2bFavoredMapper.map("2026-08-14 17:08:15.061"),
-                LocalDateTime.parse("2026-08-14T17:08:15.061")
-        );
-
-        assertNull(b2bFavoredMapper.map((String) null));
-        assertNull(b2bFavoredMapper.map(" "));
-    }
-
-    private FavrDTOWithoutChannel getFavoredResponse() {
-        var response = new FavrDTOWithoutChannel();
-
-        response.setParticao("161");
-        response.setBanco("237");
-        response.setAgencia("3750");
-        response.setConta("49161");
-        response.setCodigoFavorecido("1");
-        response.setCcpfCnpjFavorecido("718299921");
-        response.setCfilialCnpjFavorecido("0000");
-        response.setCctrlCpfFavorecido("80");
-        response.setCispbBacenFavorecido("60746948");
-        response.setBancoFavorecido("0");
-        response.setAgenciaFavorecido("0");
-        response.setContaFavorecido("0");
-        response.setDigitoFavorecido("0");
-        response.setTipoConta(FavrDTOWithoutChannel.TipoContaEnum.CACC);
-        response.setChave("71829992180");
-        response.setNome("FULANO BELTRANO DA SILVA PERFIL NOVO");
-        response.setEntrada(FavrDTOWithoutChannel.EntradaEnum.CPF_CNPJ);
-        response.setValorMinimo("");
-        response.setValorMaximo("");
-        response.setCadastro(FavrDTOWithoutChannel.CadastroEnum.FAVORITO);
-        response.setDataInicioValidade("2026-08-14 17:08:15.061");
-        response.setStatusCadastro(FavrDTOWithoutChannel.StatusCadastroEnum.ATIVO);
-
-        return response;
-    }
-}
+//
+// CONTROLLER
+//
+// NÃO ALTERAR.
+//
+// public PixPaymentValidationResponse pixPaymentValidation(
+//         @RequestHeader(
+//                 value = X_NEXT_AUTH_SYSTEM_CALL_TOKEN
+//         )
+//         @NotNull String token,
+//
+//         @RequestBody
+//         PixPaymentValidationRequest request) {
+//
+//     return pixPaymentValidationMapper.dtoToResponse(
+//             pixPaymentService.pixPaymentValidation(
+//                     pixPaymentValidationMapper.requestToDto(
+//                             request
+//                     )
+//             )
+//     );
+// }
+//
+// ============================================================================
+//
+// FLUXO FINAL:
+//
+// PixPaymentController
+//      |
+//      v
+// PixPaymentValidationMapper.requestToDto
+//      |
+//      v
+// PixPaymentService.pixPaymentValidation
+//      |
+//      +--> sameOwnershipValidation
+//      |
+//      +--> validateKeyEvp
+//      |
+//      v
+// BspiPaymentValidationMapper.toPaymentRequestDTOV2
+//      |
+//      v
+// BspiPaymentV2Builder
+//      |
+//      v
+// PaymentApiClient.intentionPaymentV3
+//      |
+//      v
+// PagamentoApi.intent3
+//      |
+//      v
+// POST /v3/intencoes
+//      |
+//      v
+// IntencaoResponseV2
+//      |
+//      v
+// BspiPaymentValidationMapper.toPixTransactionDto
+//      |
+//      v
+// PixPaymentValidationMapper.dtoToResponse
+//      |
+//      v
+// MESMO CONTRATO ATUAL DA CONTROLLER
+//
+// ============================================================================
