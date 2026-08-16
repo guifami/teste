@@ -1,34 +1,133 @@
-{
-  "recipientAccountDigit": 0,
-  "recipientBank": 237,
-  "inputMethod": "KEY_PIX",
-  "senderAccountType": "CURRENT",
-  "recipientCpfCnpj": "52998224725",
-  "recipientIspbCode": 60746948,
-  "recipientBranch": 1234,
-  "recipientAccountType": "CURRENT",
-  "transactionAmount": 10.00,
-  "recipientKeyType": "CPF_CNPJ",
-  "recipientKey": "52998224725",
-  "recipientName": "TESTE PIX",
-  "description": "Teste payment validation",
-  "confirmationCode": null,
-  "recipientAccount": 1234567,
-  "sameOwnership": false,
-  "pixTransPurposeEnum": "IPAY",
-  "cafdConfirmationDto": {
-    "userAgent": "PostmanRuntime/7.43.0",
-    "sessionCode": "SESSION-TEST-001",
-    "ipAddress": "127.0.0.1",
-    "ipPort": "8080",
-    "accessForm": "APP",
-    "equipmentIdentification": "DEVICE-TEST-001",
-    "identRegDevice": "REG-DEVICE-001",
-    "identVirtHard": "VIRTUAL-HARDWARE-001",
-    "latitude": "-23.550520",
-    "longitude": "-46.633308",
-    "modelDevice": "TEST-DEVICE",
-    "userName": "TEST_USER",
-    "platform": "ANDROID"
-  }
+// =========================
+// PixPaymentService.java
+// =========================
+
+public PixPaymentConfirmationResponse submitPix(PixPaymentDto pixPaymentDto) {
+    validateKeyEvp(pixPaymentDto);
+
+    try {
+        var appInfo = getAppInfo(strings);
+        BspiHeader bspiHeader = bspiMapper.createHeader(appInfo);
+
+        String xDadosDispositivo = writeValueAsString(
+                unwrap(getBspiDeviceData(), DadosDispositivo.class)
+        );
+
+        PaymentRequestDTOV2 paymentRequest =
+                bspiPaymentValidationMapper.toPaymentRequestDTOV2(
+                        pixPaymentDto,
+                        appInfo.getCustomer()
+                );
+
+        EfetivacaoResponse response = pagamentoApi.pay(
+                bspiHeader.getxAccessTokenPix(),
+                xDadosDispositivo,
+                paymentRequest
+        );
+
+        return bspiPaymentValidationMapper.toPixPaymentConfirmationResponse(
+                response,
+                pixPaymentDto
+        );
+
+    } catch (CoreBankingException e) {
+        var pixError = checkConfirmPaymentCoreBankingException(e);
+
+        if (PIX_TRANSACTION_DELAY_ERROR.equals(pixError)) {
+            return createResponseForAwaitingAnalysis(
+                    pixPaymentDto.getConfirmationCode(),
+                    getCafdProtocolNumber(pixPaymentDto)
+            );
+        }
+
+        throw new UnprocessableEntityException(
+                pixError.getCode(),
+                pixError,
+                strings
+        );
+
+    } catch (RuntimeException e) {
+        LOG.error(BSPI_ERROR_CONFIRM_PAYMENT, e);
+
+        throw new UnprocessableEntityException(
+                PIX_PAYMENT_GENERIC_ERROR.getCode(),
+                PIX_PAYMENT_GENERIC_ERROR,
+                strings
+        );
+    }
+}
+
+private Long getCafdProtocolNumber(PixPaymentDto pixPaymentDto) {
+    try {
+        if (isNull(pixPaymentDto.getInternalCode())) {
+            return 0L;
+        }
+
+        Map<String, String> internalCode = decodeInternalCode(
+                pixPaymentDto.getInternalCode()
+        );
+
+        String protocol = internalCode.get(CAFD_PROTOCOL);
+
+        return isNull(protocol) || protocol.isBlank()
+                ? 0L
+                : Long.valueOf(protocol);
+
+    } catch (RuntimeException e) {
+        LOG.error("Error getting CAFD protocol number", e);
+        return 0L;
+    }
+}
+
+
+// =========================
+// BspiPaymentValidationMapper.java
+// =========================
+
+public PixPaymentConfirmationResponse toPixPaymentConfirmationResponse(
+        EfetivacaoResponse response,
+        PixPaymentDto pixPaymentDto) {
+
+    PixPaymentConfirmationResponse result =
+            new PixPaymentConfirmationResponse();
+
+    PixPaymentConfirmationDto confirmation =
+            new PixPaymentConfirmationDto();
+
+    confirmation.setConfirmationCode(
+            pixPaymentDto.getConfirmationCode()
+    );
+
+    confirmation.setAwaitingAnalysis(FALSE);
+
+    if (nonNull(response)
+            && nonNull(response.getOnline())
+            && nonNull(response.getOnline().getInfo())) {
+
+        InfoEfetivacaoOnline info = response.getOnline().getInfo();
+
+        confirmation.setConfirmationNumber(
+                getConfirmationNumber(info)
+        );
+    }
+
+    result.setPixPaymentConfirmation(confirmation);
+
+    return result;
+}
+
+private Long getConfirmationNumber(InfoEfetivacaoOnline info) {
+    if (nonNull(info.getNumeroDocumento())) {
+        return info.getNumeroDocumento();
+    }
+
+    if (nonNull(info.getNsu()) && !info.getNsu().isBlank()) {
+        try {
+            return Long.valueOf(info.getNsu());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    return null;
 }
