@@ -5,6 +5,24 @@ public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest r
         String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
         AuthTokenThreadLocal.set(token);
         return response.getBody();
+    } catch (RestClientResponseException e) {
+        throw new RestClientException("Erro getQrCodeByEmv - status: " + e.getRawStatusCode() + " - body: " + e.getResponseBodyAsString(), e);
+    } catch (RestClientException e) {
+        throw new RestClientException("Erro getQrCodeByEmv - " + e.getMessage(), e);
+    }
+}
+
+
+
+
+
+@Override
+public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
+    try {
+        ResponseEntity<PixQrCodeEmvCoreNextResponse> response = getRestOperations().postForEntity(postPixURL, request, PixQrCodeEmvCoreNextResponse.class);
+        String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
+        AuthTokenThreadLocal.set(token);
+        return response.getBody();
     } catch (Exception e) {
         LOG.error("Erro getQrCodeByEmv: {}", e.getMessage(), e);
         throw e;
