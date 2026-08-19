@@ -1,6 +1,29 @@
 @Override
 public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
     try {
+        System.out.println("postPixURL: " + postPixURL);
+        System.out.println("request: " + request);
+        ResponseEntity<PixQrCodeEmvCoreNextResponse> response = getRestOperations().postForEntity(postPixURL, request, PixQrCodeEmvCoreNextResponse.class);
+        System.out.println("status: " + response.getStatusCode());
+        System.out.println("response: " + response.getBody());
+        String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
+        System.out.println("token encontrado: " + (token != null));
+        AuthTokenThreadLocal.set(token);
+        return response.getBody();
+    } catch (Exception e) {
+        System.out.println("Erro getQrCodeByEmv: " + e.getMessage());
+        e.printStackTrace();
+        throw e;
+    }
+}
+
+
+
+
+
+@Override
+public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
+    try {
         System.out.println("========== INICIO getQrCodeByEmv ==========");
         System.out.println("postPixURL: " + postPixURL);
         System.out.println("request: " + request);
