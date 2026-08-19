@@ -1,18 +1,52 @@
+@Override
+public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
+    try {
+        System.out.println("========== INICIO getQrCodeByEmv ==========");
+        System.out.println("postPixURL: " + postPixURL);
+        System.out.println("request: " + request);
 
-Claro — eu ajustaria assim:
+        ResponseEntity<PixQrCodeEmvCoreNextResponse> response =
+                getRestOperations().postForEntity(
+                        postPixURL,
+                        request,
+                        PixQrCodeEmvCoreNextResponse.class
+                );
 
-Estou solicitando o aumento do limite de tokens porque tenho utilizado a ferramenta como apoio em atividades de desenvolvimento que exigem bastante contexto, principalmente análise de implementações, troubleshooting, revisão de código, criação de testes e entendimento de fluxos entre diferentes classes e serviços. Tenho seguido as boas práticas de utilização, buscando otimizar os prompts, enviar apenas os contextos necessários e evitar interações desnecessárias, mas, mesmo assim, devido à complexidade e ao volume de algumas demandas, o limite atual acaba sendo excedido. Um limite maior permitiria trabalhar com contextos mais completos, reduzir retrabalho e acelerar a resolução das demandas.
+        System.out.println("Status HTTP: " + response.getStatusCode());
+        System.out.println("Headers: " + response.getHeaders());
+        System.out.println("Body: " + response.getBody());
 
+        String token = response.getHeaders()
+                .getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
 
-cite o pix e as demandas regulatorias tb
+        System.out.println("Header token encontrado: " + (token != null));
 
-Claro — eu deixaria mais forte assim:
+        if (token != null) {
+            System.out.println("Tamanho do token: " + token.length());
+        }
 
-Estou solicitando o aumento do limite de tokens porque tenho utilizado a ferramenta como apoio em atividades de desenvolvimento que exigem bastante contexto, principalmente nas demandas relacionadas ao Pix, incluindo análise de implementações, troubleshooting, revisão de código, criação de testes e entendimento de fluxos entre diferentes classes e serviços, além de demandas regulatórias que exigem maior cuidado e precisão na análise. Tenho seguido as boas práticas de utilização, buscando otimizar os prompts, enviar apenas os contextos necessários e evitar interações desnecessárias, mas, mesmo assim, devido à complexidade, criticidade e ao volume dessas demandas, o limite atual acaba sendo excedido. Um limite maior permitiria trabalhar com contextos mais completos, reduzir retrabalho e acelerar a resolução das demandas, mantendo a qualidade e a assertividade das entregas.
+        AuthTokenThreadLocal.set(token);
 
+        System.out.println("Token salvo no AuthTokenThreadLocal");
+        System.out.println("========== FIM getQrCodeByEmv ==========");
 
-eu trabalho numa squad que trata as demandas regulatorias do pix
+        return response.getBody();
 
-Perfeito — então vale deixar isso explícito, porque fortalece bastante a justificativa:
+    } catch (RestClientResponseException e) {
+        System.out.println("========== ERRO HTTP getQrCodeByEmv ==========");
+        System.out.println("Status HTTP: " + e.getRawStatusCode());
+        System.out.println("Response body: " + e.getResponseBodyAsString());
+        System.out.println("Mensagem: " + e.getMessage());
+        e.printStackTrace();
 
-Estou solicitando o aumento do limite de tokens porque atuo em uma squad responsável por demandas regulatórias relacionadas ao Pix, que normalmente envolvem análises técnicas mais complexas e exigem bastante contexto. Tenho utilizado a ferramenta como apoio principalmente na análise de implementações, troubleshooting, revisão de código, criação de testes e entendimento de fluxos entre diferentes classes, serviços e integrações. Tenho seguido as boas práticas de utilização, buscando otimizar os prompts, enviar apenas os contextos necessários e evitar interações desnecessárias, mas, mesmo assim, devido à complexidade, criticidade e ao volume das demandas regulatórias do Pix, o limite atual acaba sendo excedido. Um limite maior permitiria trabalhar com contextos mais completos, reduzir retrabalho e acelerar a resolução das demandas, mantendo a qualidade e a assertividade das entregas.
+        throw e;
+
+    } catch (Exception e) {
+        System.out.println("========== ERRO getQrCodeByEmv ==========");
+        System.out.println("Tipo: " + e.getClass().getName());
+        System.out.println("Mensagem: " + e.getMessage());
+        e.printStackTrace();
+
+        throw e;
+    }
+}
