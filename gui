@@ -1,3 +1,89 @@
+// IMPORTS
+import br.com.bradesco.next.pix.domain.dto.PixPaymentScheduledDto;
+import br.com.bradesco.next.pix.domain.dto.PixPaymentScheduleListDto;
+import br.com.bradesco.next.pix.domain.response.PixPaymentScheduleListResponse;
+import java.math.BigDecimal;
+import java.text.NumberFormat;
+import java.time.LocalDate;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+// CONSTANTES
+private static final Integer PIX_SCHEDULED_LIMIT_CONDITION_CODE = 6731;
+private static final int PIX_SCHEDULE_LOOKAHEAD_YEARS = 1;
+
+// VALIDAÇÃO
+private void validateScheduledPixLimit(String customerCpf, PixLimitUpdateRequest request) {
+    if (!Objects.equals(PIX_SCHEDULED_LIMIT_CONDITION_CODE, request.getConditionLimitCode())) return;
+
+    BigDecimal newLimitAmount = request.getLimitAmount();
+    BigDecimal currentLimitAmount = request.getCurrentLimitAmount();
+
+    if (newLimitAmount == null || currentLimitAmount == null || newLimitAmount.compareTo(currentLimitAmount) >= 0) return;
+
+    validateScheduledPixRequestData(request);
+
+    BigDecimal scheduledAmount = getHighestScheduledAmountAboveNewLimit(customerCpf, request, newLimitAmount);
+
+    if (scheduledAmount == null) return;
+
+    NextError nextError = PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED;
+    String[] messageParams = {formatCurrency(scheduledAmount)};
+
+    LOG.info("Pix limit update warning. conditionLimitCode: [{}], currentLimit: [{}], newLimit: [{}], scheduledAmount: [{}]", request.getConditionLimitCode(), currentLimitAmount, newLimitAmount, scheduledAmount);
+
+    throw new UnprocessableEntityException(nextError.getCode(), nextError, messageParams);
+}
+
+private void validateScheduledPixRequestData(PixLimitUpdateRequest request) {
+    if (request.getBranch() == null || request.getAccount() == null) throw new IllegalArgumentException("Branch and account are required to validate Pix scheduled payments");
+}
+
+private BigDecimal getHighestScheduledAmountAboveNewLimit(String customerCpf, PixLimitUpdateRequest request, BigDecimal newLimitAmount) {
+    PixPaymentScheduleListDto scheduleListDto = createPixPaymentScheduleListDto(customerCpf, request);
+    PixPaymentScheduleListResponse scheduleListResponse = pixPaymentScheduleService.retrieveSchedules(scheduleListDto);
+    List<PixPaymentScheduledDto> schedules = getSchedules(scheduleListResponse);
+
+    if (schedules.isEmpty()) return null;
+
+    Map<LocalDate, BigDecimal> scheduledAmountByDate = schedules.stream()
+            .filter(Objects::nonNull)
+            .filter(schedule -> schedule.getScheduleDate() != null)
+            .filter(schedule -> schedule.getAmount() != null)
+            .collect(Collectors.groupingBy(PixPaymentScheduledDto::getScheduleDate, Collectors.reducing(BigDecimal.ZERO, PixPaymentScheduledDto::getAmount, BigDecimal::add)));
+
+    return scheduledAmountByDate.values().stream().filter(total -> total.compareTo(newLimitAmount) > 0).max(BigDecimal::compareTo).orElse(null);
+}
+
+private PixPaymentScheduleListDto createPixPaymentScheduleListDto(String customerCpf, PixLimitUpdateRequest request) {
+    PixPaymentScheduleListDto scheduleListDto = new PixPaymentScheduleListDto();
+    scheduleListDto.setCpf(customerCpf);
+    scheduleListDto.setBranch(request.getBranch());
+    scheduleListDto.setAccount(request.getAccount());
+    scheduleListDto.setAccountType(request.getAccountType());
+    scheduleListDto.setStartDate(LocalDate.now());
+    scheduleListDto.setEndDate(LocalDate.now().plusYears(PIX_SCHEDULE_LOOKAHEAD_YEARS));
+    scheduleListDto.setPage(null);
+    scheduleListDto.setPageSize(null);
+    return scheduleListDto;
+}
+
+private List<PixPaymentScheduledDto> getSchedules(PixPaymentScheduleListResponse response) {
+    return Optional.ofNullable(response).map(PixPaymentScheduleListResponse::getSchedules).orElse(Collections.emptyList());
+}
+
+private String formatCurrency(BigDecimal value) {
+    return NumberFormat.getCurrencyInstance(new Locale("pt", "BR")).format(value);
+}
+
+
+
+
 // =================================================================================================
 // 1. PixLimitUpdateRequest.java
 // ADICIONAR ESTES CAMPOS NA CLASSE PixLimitUpdateRequest.
