@@ -1,129 +1,277 @@
+// =================================================================================================
+// 1. PixLimitUpdateRequest.java
+// ADICIONAR ESTES CAMPOS NA CLASSE PixLimitUpdateRequest.
+// Precisamos deles porque o endpoint de update atual não possui account/branch/accountType nem o limite atual.
+// limitAmount continua sendo o NOVO valor escolhido.
+// =================================================================================================
+
+@ApiModelProperty(value = "Current limit amount")
+private BigDecimal currentLimitAmount;
+
+@ApiModelProperty(value = "Branch")
+private Integer branch;
+
+@ApiModelProperty(value = "Account")
+private Long account;
+
+@ApiModelProperty(value = "Account type")
+private PixAccountTypesEnum accountType;
+
+public BigDecimal getCurrentLimitAmount() { return currentLimitAmount; }
+
+public void setCurrentLimitAmount(BigDecimal currentLimitAmount) { this.currentLimitAmount = currentLimitAmount; }
+
+public Integer getBranch() { return branch; }
+
+public void setBranch(Integer branch) { this.branch = branch; }
+
+public Long getAccount() { return account; }
+
+public void setAccount(Long account) { this.account = account; }
+
+public PixAccountTypesEnum getAccountType() { return accountType; }
+
+public void setAccountType(PixAccountTypesEnum accountType) { this.accountType = accountType; }
+
+
+// =================================================================================================
+// 2. NpcNextErrorEnum.java
+// ADICIONAR JUNTO DOS OUTROS ERROS DE PIX/PAYMENT SCHEDULE.
+// Nos seus prints já existem PIX_PAYMENT_SCHEDULE_FAIL_CONNECTION, REALIZED, CREDIT_EXCEEDED etc.
+// =================================================================================================
+
+PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED("NEXT_PIX_LIMIT_UPDATE_WARNING_001", "next.pix.limit.update.warning.001"),
+
+
+// =================================================================================================
+// 3. strings.properties
+// ADICIONAR ESTA PROPRIEDADE.
+// O {0} receberá o maior valor total de Pix agendados encontrado para uma mesma data.
+// =================================================================================================
+
+// next.pix.limit.update.warning.001=Você tem {0} em Pix agendados para uma mesma data. Caso siga com o limite que escolheu, pode ser que um ou mais pagamentos não sejam concluídos.
+
+
+// =================================================================================================
+// 4. PixLimitServiceImpl.java - IMPORTS
+// ADICIONAR APENAS OS QUE AINDA NÃO EXISTIREM.
+// =================================================================================================
+
+import java.math.BigDecimal;
+import java.text.NumberFormat;
+import java.time.LocalDate;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+import static br.com.bradesco.next.pix.domain.enums.error.NpcNextErrorEnum.PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED;
+
+
+// =================================================================================================
+// 5. PixLimitServiceImpl.java - CONSTANTES
+// COLOCAR JUNTO DAS OUTRAS CONSTANTES DA CLASSE.
+// 6731 é o conditionLimitCode que terá essa regra.
+// O período de 1 ano deve ser alterado caso o produto utilize outro horizonte máximo para Pix agendado.
+// =================================================================================================
+
+private static final Integer PIX_SCHEDULED_LIMIT_CONDITION_CODE = 6731;
+private static final int PIX_SCHEDULE_LOOKAHEAD_YEARS = 1;
+
+
+// =================================================================================================
+// 6. PixLimitServiceImpl.java - DEPENDÊNCIA
+// COLOCAR JUNTO DOS OUTROS @Autowired DA CLASSE.
+// =================================================================================================
+
+@Autowired
+private PixPaymentScheduleService pixPaymentScheduleService;
+
+
+// =================================================================================================
+// 7. PixLimitServiceImpl.java
+// SUBSTITUIR O SEU MÉTODO updateLimit ATUAL POR ESTE.
+// A validação acontece ANTES da chamada createOrUpdateLimit da LIoP.
+// =================================================================================================
+
 @Override
-public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
+public PixUpdateLimitResponse updateLimit(String customerCpf, PixLimitUpdateRequest request) {
     try {
-        ResponseEntity<PixQrCodeEmvCoreNextResponse> response = getRestOperations().postForEntity(postPixURL, request, PixQrCodeEmvCoreNextResponse.class);
-        String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
-        AuthTokenThreadLocal.set(token);
-        return response.getBody();
-    } catch (RestClientResponseException e) {
-        throw new RestClientException("Erro getQrCodeByEmv - HTTP " + e.getStatusCode().value() + " - " + e.getStatusText() + " - body: " + e.getResponseBodyAsString(), e);
-    } catch (RestClientException e) {
-        throw new RestClientException("Erro getQrCodeByEmv - " + e.getMessage(), e);
+        validateScheduledPixLimit(customerCpf, request);
+
+        UpdateLimitModel updateLimitModel = createUpdateLimitModel(request);
+        UpdateLimitResponse updateLimitResponse = liopSelfManagementEngClient.createOrUpdateLimit(createHeader(customerCpf), updateLimitModel);
+
+        String messageCode = ofNullable(updateLimitResponse).map(UpdateLimitResponse::getPayload).map(UpdateLimitPayload::getMessageCode).orElse(null);
+        LiopReturnSuccessCodeEnum liopReturnSuccessCode = getByCode(messageCode);
+
+        return new PixUpdateLimitResponse(PixUpdateLimitStatusEnum.getByLiopReturnSuccessCode(liopReturnSuccessCode));
+    } catch (CoreBankingException coreEx) {
+        NextError nextError = getLiopCoreBankMessage(coreEx);
+        LOG.error("Update Limit Error: [{}]", coreEx.getMessage());
+        throw new UnprocessableEntityException(nextError.getCode(), nextError, strings);
     }
 }
 
 
+// =================================================================================================
+// 8. PixLimitServiceImpl.java
+// ADICIONAR ESTES MÉTODOS PRIVADOS LOGO ABAIXO DO updateLimit OU PRÓXIMO DO createUpdateLimitModel.
+// =================================================================================================
 
+private void validateScheduledPixLimit(String customerCpf, PixLimitUpdateRequest request) {
+    if (!Objects.equals(PIX_SCHEDULED_LIMIT_CONDITION_CODE, request.getConditionLimitCode())) {
+        return;
+    }
 
+    BigDecimal newLimitAmount = request.getLimitAmount();
+    BigDecimal currentLimitAmount = request.getCurrentLimitAmount();
 
+    if (newLimitAmount == null || currentLimitAmount == null || newLimitAmount.compareTo(currentLimitAmount) >= 0) {
+        return;
+    }
 
-@Override
-public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
-    try {
-        ResponseEntity<PixQrCodeEmvCoreNextResponse> response = getRestOperations().postForEntity(postPixURL, request, PixQrCodeEmvCoreNextResponse.class);
-        String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
-        AuthTokenThreadLocal.set(token);
-        return response.getBody();
-    } catch (RestClientResponseException e) {
-        throw new RestClientException("Erro getQrCodeByEmv - status: " + e.getRawStatusCode() + " - body: " + e.getResponseBodyAsString(), e);
-    } catch (RestClientException e) {
-        throw new RestClientException("Erro getQrCodeByEmv - " + e.getMessage(), e);
+    validateScheduledPixRequestData(request);
+
+    BigDecimal scheduledAmount = getHighestScheduledAmountAboveNewLimit(customerCpf, request, newLimitAmount);
+
+    if (scheduledAmount == null) {
+        return;
+    }
+
+    NextError nextError = PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED;
+    String[] messageParams = {formatCurrency(scheduledAmount)};
+
+    LOG.info("Pix limit update warning. conditionLimitCode: [{}], currentLimit: [{}], newLimit: [{}], scheduledAmount: [{}]", request.getConditionLimitCode(), currentLimitAmount, newLimitAmount, scheduledAmount);
+
+    throw new UnprocessableEntityException(nextError.getCode(), nextError, messageParams);
+}
+
+private void validateScheduledPixRequestData(PixLimitUpdateRequest request) {
+    if (request.getBranch() == null || request.getAccount() == null) {
+        throw new IllegalArgumentException("Branch and account are required to validate Pix scheduled payments");
     }
 }
 
+private BigDecimal getHighestScheduledAmountAboveNewLimit(String customerCpf, PixLimitUpdateRequest request, BigDecimal newLimitAmount) {
+    PixPaymentScheduleListDto scheduleListDto = createPixPaymentScheduleListDto(customerCpf, request);
+    PixPaymentScheduleListResponse scheduleListResponse = pixPaymentScheduleService.retrieveSchedules(scheduleListDto);
+    List<PixPaymentScheduleResponse> schedules = getSchedules(scheduleListResponse);
 
-
-
-
-@Override
-public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
-    try {
-        ResponseEntity<PixQrCodeEmvCoreNextResponse> response = getRestOperations().postForEntity(postPixURL, request, PixQrCodeEmvCoreNextResponse.class);
-        String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
-        AuthTokenThreadLocal.set(token);
-        return response.getBody();
-    } catch (Exception e) {
-        LOG.error("Erro getQrCodeByEmv: {}", e.getMessage(), e);
-        throw e;
+    if (schedules.isEmpty()) {
+        return null;
     }
+
+    Map<LocalDate, BigDecimal> scheduledAmountByDate = schedules.stream()
+            .filter(Objects::nonNull)
+            .filter(schedule -> getScheduleDate(schedule) != null)
+            .filter(schedule -> getScheduleAmount(schedule) != null)
+            .collect(Collectors.groupingBy(this::getScheduleDate, Collectors.reducing(BigDecimal.ZERO, this::getScheduleAmount, BigDecimal::add)));
+
+    return scheduledAmountByDate.values().stream().filter(total -> total.compareTo(newLimitAmount) > 0).max(BigDecimal::compareTo).orElse(null);
+}
+
+private PixPaymentScheduleListDto createPixPaymentScheduleListDto(String customerCpf, PixLimitUpdateRequest request) {
+    PixPaymentScheduleListDto scheduleListDto = new PixPaymentScheduleListDto();
+    scheduleListDto.setCpf(customerCpf);
+    scheduleListDto.setBranch(request.getBranch());
+    scheduleListDto.setAccount(request.getAccount());
+    scheduleListDto.setAccountType(request.getAccountType());
+    scheduleListDto.setStartDate(LocalDate.now());
+    scheduleListDto.setEndDate(LocalDate.now().plusYears(PIX_SCHEDULE_LOOKAHEAD_YEARS));
+    scheduleListDto.setPage(null);
+    scheduleListDto.setPageSize(null);
+    return scheduleListDto;
+}
+
+private String formatCurrency(BigDecimal value) {
+    return NumberFormat.getCurrencyInstance(new Locale("pt", "BR")).format(value);
 }
 
 
+// =================================================================================================
+// 9. PixLimitServiceImpl.java
+// ESTES SÃO OS ÚNICOS 3 MÉTODOS QUE VOCÊ PODE PRECISAR AJUSTAR DE ACORDO COM OS NOMES REAIS
+// DO SEU PixPaymentScheduleListResponse E PixPaymentScheduleResponse.
+// A REGRA DE NEGÓCIO NÃO PRECISA SER ALTERADA.
+// =================================================================================================
 
+private List<PixPaymentScheduleResponse> getSchedules(PixPaymentScheduleListResponse response) {
+    return Optional.ofNullable(response).map(PixPaymentScheduleListResponse::getSchedules).orElse(Collections.emptyList());
+}
 
+private LocalDate getScheduleDate(PixPaymentScheduleResponse schedule) {
+    return schedule.getScheduledDate();
+}
 
-@Override
-public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
-    try {
-        System.out.println("postPixURL: " + postPixURL);
-        System.out.println("request: " + request);
-        ResponseEntity<PixQrCodeEmvCoreNextResponse> response = getRestOperations().postForEntity(postPixURL, request, PixQrCodeEmvCoreNextResponse.class);
-        System.out.println("status: " + response.getStatusCode());
-        System.out.println("response: " + response.getBody());
-        String token = response.getHeaders().getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
-        System.out.println("token encontrado: " + (token != null));
-        AuthTokenThreadLocal.set(token);
-        return response.getBody();
-    } catch (Exception e) {
-        System.out.println("Erro getQrCodeByEmv: " + e.getMessage());
-        e.printStackTrace();
-        throw e;
-    }
+private BigDecimal getScheduleAmount(PixPaymentScheduleResponse schedule) {
+    return schedule.getAmount();
 }
 
 
+// =================================================================================================
+// 10. PixLimitController.java
+// O CONTROLLER NÃO PRECISA MUDAR CASO branch/account/accountType/currentLimitAmount VENHAM NO BODY.
+// PODE CONTINUAR EXATAMENTE ASSIM.
+// =================================================================================================
 
-
-
-@Override
-public PixQrCodeEmvCoreNextResponse getQrCodeByEmv(PixQrCodeEmvCoreNextRequest request) {
-    try {
-        System.out.println("========== INICIO getQrCodeByEmv ==========");
-        System.out.println("postPixURL: " + postPixURL);
-        System.out.println("request: " + request);
-
-        ResponseEntity<PixQrCodeEmvCoreNextResponse> response =
-                getRestOperations().postForEntity(
-                        postPixURL,
-                        request,
-                        PixQrCodeEmvCoreNextResponse.class
-                );
-
-        System.out.println("Status HTTP: " + response.getStatusCode());
-        System.out.println("Headers: " + response.getHeaders());
-        System.out.println("Body: " + response.getBody());
-
-        String token = response.getHeaders()
-                .getFirst(NextMeEnum.HEADER_CORE_NEXT_TOKEN.getDescription());
-
-        System.out.println("Header token encontrado: " + (token != null));
-
-        if (token != null) {
-            System.out.println("Tamanho do token: " + token.length());
-        }
-
-        AuthTokenThreadLocal.set(token);
-
-        System.out.println("Token salvo no AuthTokenThreadLocal");
-        System.out.println("========== FIM getQrCodeByEmv ==========");
-
-        return response.getBody();
-
-    } catch (RestClientResponseException e) {
-        System.out.println("========== ERRO HTTP getQrCodeByEmv ==========");
-        System.out.println("Status HTTP: " + e.getRawStatusCode());
-        System.out.println("Response body: " + e.getResponseBodyAsString());
-        System.out.println("Mensagem: " + e.getMessage());
-        e.printStackTrace();
-
-        throw e;
-
-    } catch (Exception e) {
-        System.out.println("========== ERRO getQrCodeByEmv ==========");
-        System.out.println("Tipo: " + e.getClass().getName());
-        System.out.println("Mensagem: " + e.getMessage());
-        e.printStackTrace();
-
-        throw e;
-    }
+@ApiOperation(value = "Update Limit V2")
+@PutMapping(path = PATH_V2 + "/update", produces = APPLICATION_JSON_VALUE)
+public ResponseEntity<PixUpdateLimitResponse> updateLimitV2(
+        @RequestHeader(value = AUTH_HEADER_NAME) String token,
+        @Cpf String customerCpf,
+        @RequestBody @Valid PixLimitUpdateRequest request) {
+    return ResponseEntity.ok().body(service.updateLimit(customerCpf, request));
 }
+
+
+// =================================================================================================
+// 11. EXEMPLO DO BODY QUE O APP PASSARIA PARA O UPDATE.
+// NÃO É CÓDIGO JAVA; É SOMENTE PARA VOCÊ ENTENDER OS CAMPOS NOVOS.
+// =================================================================================================
+
+// {
+//   "conditionLimitCode": 6731,
+//   "limitAmount": 1000.00,
+//   "currentLimitAmount": 5000.00,
+//   "branch": 1234,
+//   "account": 12345678,
+//   "accountType": "...",
+//   ...demais campos que já existem no PixLimitUpdateRequest
+// }
+
+
+// =================================================================================================
+// RESULTADO DA REGRA
+//
+// conditionLimitCode != 6731
+//      -> NÃO consulta agendamentos
+//
+// conditionLimitCode == 6731 e novo limite >= limite atual
+//      -> NÃO consulta agendamentos
+//
+// conditionLimitCode == 6731 e novo limite < limite atual
+//      -> consulta Pix agendados
+//      -> agrupa por data
+//      -> soma todos os valores da mesma data
+//
+// Exemplo:
+//
+// 25/08 = R$ 500 + R$ 700 + R$ 300 = R$ 1.500
+// 26/08 = R$ 400
+//
+// Novo limite = R$ 1.000
+//
+// Como 25/08 possui R$ 1.500 e R$ 1.500 > R$ 1.000:
+//      -> lança NEXT_PIX_LIMIT_UPDATE_WARNING_001
+//      -> strings.properties monta a mensagem usando R$ 1.500,00
+//      -> app identifica o código e abre o modal
+//
+// Nenhuma data acima do novo limite:
+//      -> fluxo continua normalmente
+//      -> createUpdateLimitModel(request)
+//      -> liopSelfManagementEngClient.createOrUpdateLimit(...)
+// =================================================================================================
