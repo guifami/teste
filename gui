@@ -1,3 +1,22 @@
+import hashlib
+import os
+
+quantidade = int(input("Quantidade de arquivos: "))
+
+for i in range(quantidade):
+    caminho = input(f"Caminho absoluto do arquivo {i + 1}: ").strip().strip('"')
+
+    if not os.path.isfile(caminho):
+        print(f"Arquivo não encontrado: {caminho}")
+        continue
+
+    with open(caminho, "rb") as arquivo:
+        hash_md5 = hashlib.md5(arquivo.read()).hexdigest()
+
+    print(hash_md5)
+
+
+
 53c23f7530eee58d855d492adf7ab8d6
 2cfa6b31f943b8b2457cf99bc2303aa6
 
