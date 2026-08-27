@@ -1,396 +1,264 @@
-import hashlib
-import os
+package br.com.bradesco.next.pix.payment.service;
 
-quantidade = int(input("Quantidade de arquivos: "))
-
-for i in range(quantidade):
-    caminho = input(f"Caminho absoluto do arquivo {i + 1}: ").strip().strip('"')
-
-    if not os.path.isfile(caminho):
-        print(f"Arquivo não encontrado: {caminho}")
-        continue
-
-    with open(caminho, "rb") as arquivo:
-        hash_md5 = hashlib.md5(arquivo.read()).hexdigest()
-
-    print(hash_md5)
-
-
-
-53c23f7530eee58d855d492adf7ab8d6
-2cfa6b31f943b8b2457cf99bc2303aa6
-
-
-
-e650870020ce9a6a0a097f6dc14f290e
-7a7cce55ccfdf3e328ae6b06461e5a2a
-
-
-5cdc95a634208679a4cb51cdd8acddf7f9899328
-0c4b7eb12616e52594c359244c71ee5f0867cf45
-
-
-
-// IMPORTS
-import br.com.bradesco.next.pix.domain.dto.PixPaymentScheduledDto;
-import br.com.bradesco.next.pix.domain.dto.PixPaymentScheduleListDto;
-import br.com.bradesco.next.pix.domain.response.PixPaymentScheduleListResponse;
-import java.math.BigDecimal;
-import java.text.NumberFormat;
-import java.time.LocalDate;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.stream.Collectors;
-
-// CONSTANTES
-private static final Integer PIX_SCHEDULED_LIMIT_CONDITION_CODE = 6731;
-private static final int PIX_SCHEDULE_LOOKAHEAD_YEARS = 1;
-
-// VALIDAÇÃO
-private void validateScheduledPixLimit(String customerCpf, PixLimitUpdateRequest request) {
-    if (!Objects.equals(PIX_SCHEDULED_LIMIT_CONDITION_CODE, request.getConditionLimitCode())) return;
-
-    BigDecimal newLimitAmount = request.getLimitAmount();
-    BigDecimal currentLimitAmount = request.getCurrentLimitAmount();
-
-    if (newLimitAmount == null || currentLimitAmount == null || newLimitAmount.compareTo(currentLimitAmount) >= 0) return;
-
-    validateScheduledPixRequestData(request);
-
-    BigDecimal scheduledAmount = getHighestScheduledAmountAboveNewLimit(customerCpf, request, newLimitAmount);
-
-    if (scheduledAmount == null) return;
-
-    NextError nextError = PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED;
-    String[] messageParams = {formatCurrency(scheduledAmount)};
-
-    LOG.info("Pix limit update warning. conditionLimitCode: [{}], currentLimit: [{}], newLimit: [{}], scheduledAmount: [{}]", request.getConditionLimitCode(), currentLimitAmount, newLimitAmount, scheduledAmount);
-
-    throw new UnprocessableEntityException(nextError.getCode(), nextError, messageParams);
-}
-
-private void validateScheduledPixRequestData(PixLimitUpdateRequest request) {
-    if (request.getBranch() == null || request.getAccount() == null) throw new IllegalArgumentException("Branch and account are required to validate Pix scheduled payments");
-}
-
-private BigDecimal getHighestScheduledAmountAboveNewLimit(String customerCpf, PixLimitUpdateRequest request, BigDecimal newLimitAmount) {
-    PixPaymentScheduleListDto scheduleListDto = createPixPaymentScheduleListDto(customerCpf, request);
-    PixPaymentScheduleListResponse scheduleListResponse = pixPaymentScheduleService.retrieveSchedules(scheduleListDto);
-    List<PixPaymentScheduledDto> schedules = getSchedules(scheduleListResponse);
-
-    if (schedules.isEmpty()) return null;
-
-    Map<LocalDate, BigDecimal> scheduledAmountByDate = schedules.stream()
-            .filter(Objects::nonNull)
-            .filter(schedule -> schedule.getScheduleDate() != null)
-            .filter(schedule -> schedule.getAmount() != null)
-            .collect(Collectors.groupingBy(PixPaymentScheduledDto::getScheduleDate, Collectors.reducing(BigDecimal.ZERO, PixPaymentScheduledDto::getAmount, BigDecimal::add)));
-
-    return scheduledAmountByDate.values().stream().filter(total -> total.compareTo(newLimitAmount) > 0).max(BigDecimal::compareTo).orElse(null);
-}
-
-private PixPaymentScheduleListDto createPixPaymentScheduleListDto(String customerCpf, PixLimitUpdateRequest request) {
-    PixPaymentScheduleListDto scheduleListDto = new PixPaymentScheduleListDto();
-    scheduleListDto.setCpf(customerCpf);
-    scheduleListDto.setBranch(request.getBranch());
-    scheduleListDto.setAccount(request.getAccount());
-    scheduleListDto.setAccountType(request.getAccountType());
-    scheduleListDto.setStartDate(LocalDate.now());
-    scheduleListDto.setEndDate(LocalDate.now().plusYears(PIX_SCHEDULE_LOOKAHEAD_YEARS));
-    scheduleListDto.setPage(null);
-    scheduleListDto.setPageSize(null);
-    return scheduleListDto;
-}
-
-private List<PixPaymentScheduledDto> getSchedules(PixPaymentScheduleListResponse response) {
-    return Optional.ofNullable(response).map(PixPaymentScheduleListResponse::getSchedules).orElse(Collections.emptyList());
-}
-
-private String formatCurrency(BigDecimal value) {
-    return NumberFormat.getCurrencyInstance(new Locale("pt", "BR")).format(value);
-}
-
-
-
-
-// =================================================================================================
-// 1. PixLimitUpdateRequest.java
-// ADICIONAR ESTES CAMPOS NA CLASSE PixLimitUpdateRequest.
-// Precisamos deles porque o endpoint de update atual não possui account/branch/accountType nem o limite atual.
-// limitAmount continua sendo o NOVO valor escolhido.
-// =================================================================================================
-
-@ApiModelProperty(value = "Current limit amount")
-private BigDecimal currentLimitAmount;
-
-@ApiModelProperty(value = "Branch")
-private Integer branch;
-
-@ApiModelProperty(value = "Account")
-private Long account;
-
-@ApiModelProperty(value = "Account type")
-private PixAccountTypesEnum accountType;
-
-public BigDecimal getCurrentLimitAmount() { return currentLimitAmount; }
-
-public void setCurrentLimitAmount(BigDecimal currentLimitAmount) { this.currentLimitAmount = currentLimitAmount; }
-
-public Integer getBranch() { return branch; }
-
-public void setBranch(Integer branch) { this.branch = branch; }
-
-public Long getAccount() { return account; }
-
-public void setAccount(Long account) { this.account = account; }
-
-public PixAccountTypesEnum getAccountType() { return accountType; }
-
-public void setAccountType(PixAccountTypesEnum accountType) { this.accountType = accountType; }
-
-
-// =================================================================================================
-// 2. NpcNextErrorEnum.java
-// ADICIONAR JUNTO DOS OUTROS ERROS DE PIX/PAYMENT SCHEDULE.
-// Nos seus prints já existem PIX_PAYMENT_SCHEDULE_FAIL_CONNECTION, REALIZED, CREDIT_EXCEEDED etc.
-// =================================================================================================
-
-PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED("NEXT_PIX_LIMIT_UPDATE_WARNING_001", "next.pix.limit.update.warning.001"),
-
-
-// =================================================================================================
-// 3. strings.properties
-// ADICIONAR ESTA PROPRIEDADE.
-// O {0} receberá o maior valor total de Pix agendados encontrado para uma mesma data.
-// =================================================================================================
-
-// next.pix.limit.update.warning.001=Você tem {0} em Pix agendados para uma mesma data. Caso siga com o limite que escolheu, pode ser que um ou mais pagamentos não sejam concluídos.
-
-
-// =================================================================================================
-// 4. PixLimitServiceImpl.java - IMPORTS
-// ADICIONAR APENAS OS QUE AINDA NÃO EXISTIREM.
-// =================================================================================================
+import br.com.bradesco.next.common.client.FeignCustomException;
+import br.com.bradesco.next.common.strings.StringBundle;
+import br.com.bradesco.next.common.web.exception.UnprocessableEntityException;
+import br.com.bradesco.next.corebank.api.bspi.BspiHeader;
+import br.com.bradesco.next.corebank.api.bspi.consultadadosconta.AccountDataMessageResponse;
+import br.com.bradesco.next.corebank.api.bspi.consultadadosconta.BspiApiAccountDataRetrieveFeignClient;
+import br.com.bradesco.next.corebank.api.bspi.pagamento.BspiPaymentFeignClient;
+import br.com.bradesco.next.corebank.api.util.CoreBankingException;
+import br.com.bradesco.next.pix.payment.builder.FeignCustomExceptionBuilder;
+import br.com.bradesco.next.pix.payment.client.PaymentApiClient;
+import br.com.bradesco.next.pix.payment.domain.builder.BspiPaymentV2Builder;
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentDto;
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076ContextDto;
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentScheduleDto;
+import br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError;
+import br.com.bradesco.next.pix.payment.utils.PixParametersUtil;
+import br.com.bradesco.next.pix.payment.utils.PixPaymentM0076RuleResolver;
+import br.com.bradesco.next.pix.payment.utils.PixPaymentValidationResponseBuilder;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockedStatic;
+import org.mockito.MockitoAnnotations;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
-import java.text.NumberFormat;
 import java.time.LocalDate;
-import java.util.Collections;
-import java.util.List;
-import java.util.Locale;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
-import static br.com.bradesco.next.pix.domain.enums.error.NpcNextErrorEnum.PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED;
+import static br.com.bradesco.next.pix.payment.builder.PixPaymentBuilder.getBspiPaymentV2Request;
+import static br.com.bradesco.next.pix.payment.builder.PixPaymentRequestBuilder.getPixPaymentDto;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 
+public class PixPaymentValidationServiceM0076Test {
 
-// =================================================================================================
-// 5. PixLimitServiceImpl.java - CONSTANTES
-// COLOCAR JUNTO DAS OUTRAS CONSTANTES DA CLASSE.
-// 6731 é o conditionLimitCode que terá essa regra.
-// O período de 1 ano deve ser alterado caso o produto utilize outro horizonte máximo para Pix agendado.
-// =================================================================================================
+    @InjectMocks
+    private PixPaymentValidationService fixture;
 
-private static final Integer PIX_SCHEDULED_LIMIT_CONDITION_CODE = 6731;
-private static final int PIX_SCHEDULE_LOOKAHEAD_YEARS = 1;
+    @Mock
+    private BspiApiAccountDataRetrieveFeignClient bspiApiAccountDataRetrieveFeignClient;
 
+    @Mock
+    private BspiRequestService bspiRequestUtils;
 
-// =================================================================================================
-// 6. PixLimitServiceImpl.java - DEPENDÊNCIA
-// COLOCAR JUNTO DOS OUTROS @Autowired DA CLASSE.
-// =================================================================================================
+    @Mock
+    private BspiPaymentFeignClient bspiPaymentFeignClient;
 
-@Autowired
-private PixPaymentScheduleService pixPaymentScheduleService;
+    @Mock
+    private PixStatisticDataService pixStatisticDataService;
 
+    @Mock
+    private PixPaymentInternalAccountValidatorService pixPaymentInternalAccountValidatorService;
 
-// =================================================================================================
-// 7. PixLimitServiceImpl.java
-// SUBSTITUIR O SEU MÉTODO updateLimit ATUAL POR ESTE.
-// A validação acontece ANTES da chamada createOrUpdateLimit da LIoP.
-// =================================================================================================
+    @Mock
+    private PixPaymentValidationResponseBuilder pixPaymentValidationResponseUtil;
 
-@Override
-public PixUpdateLimitResponse updateLimit(String customerCpf, PixLimitUpdateRequest request) {
-    try {
-        validateScheduledPixLimit(customerCpf, request);
+    @Mock
+    private StringBundle strings;
 
-        UpdateLimitModel updateLimitModel = createUpdateLimitModel(request);
-        UpdateLimitResponse updateLimitResponse = liopSelfManagementEngClient.createOrUpdateLimit(createHeader(customerCpf), updateLimitModel);
+    @Mock
+    private PaymentApiClient paymentApiClient;
 
-        String messageCode = ofNullable(updateLimitResponse).map(UpdateLimitResponse::getPayload).map(UpdateLimitPayload::getMessageCode).orElse(null);
-        LiopReturnSuccessCodeEnum liopReturnSuccessCode = getByCode(messageCode);
+    @Mock
+    private PixParametersUtil pixParametersUtil;
 
-        return new PixUpdateLimitResponse(PixUpdateLimitStatusEnum.getByLiopReturnSuccessCode(liopReturnSuccessCode));
-    } catch (CoreBankingException coreEx) {
-        NextError nextError = getLiopCoreBankMessage(coreEx);
-        LOG.error("Update Limit Error: [{}]", coreEx.getMessage());
-        throw new UnprocessableEntityException(nextError.getCode(), nextError, strings);
-    }
-}
+    @Mock
+    private PixScheduleQueryService pixScheduleQueryService;
 
-
-// =================================================================================================
-// 8. PixLimitServiceImpl.java
-// ADICIONAR ESTES MÉTODOS PRIVADOS LOGO ABAIXO DO updateLimit OU PRÓXIMO DO createUpdateLimitModel.
-// =================================================================================================
-
-private void validateScheduledPixLimit(String customerCpf, PixLimitUpdateRequest request) {
-    if (!Objects.equals(PIX_SCHEDULED_LIMIT_CONDITION_CODE, request.getConditionLimitCode())) {
-        return;
+    @BeforeMethod
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+        when(pixStatisticDataService.getEndToEndConfirmationCode(any(PixPaymentDto.class))).thenReturn(Optional.empty());
+        when(bspiApiAccountDataRetrieveFeignClient.accountData(any(BspiHeader.class), anyInt(), anyInt())).thenReturn(new AccountDataMessageResponse());
+        when(pixScheduleQueryService.getScheduledAmountForDate(any(), any(LocalDate.class))).thenReturn(BigDecimal.ZERO);
     }
 
-    BigDecimal newLimitAmount = request.getLimitAmount();
-    BigDecimal currentLimitAmount = request.getCurrentLimitAmount();
-
-    if (newLimitAmount == null || currentLimitAmount == null || newLimitAmount.compareTo(currentLimitAmount) >= 0) {
-        return;
+    private CoreBankingException coreBankingExceptionWithCode(String codigoRetorno) {
+        Map<String, Object> jsonBody = new HashMap<>();
+        jsonBody.put("codigoRetorno", codigoRetorno);
+        return new CoreBankingException(400, "APIFail", "API", jsonBody);
     }
 
-    validateScheduledPixRequestData(request);
+    @Test
+    public void validation_whenCoreBankingExceptionReturnsM0076_deveDelegarParaResolverComContextoCorreto() {
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setTransactionAmount(new BigDecimal("1500"));
+        pixPaymentDto.setSameOwnership(false);
 
-    BigDecimal scheduledAmount = getHighestScheduledAmountAboveNewLimit(customerCpf, request, newLimitAmount);
+        LocalDate scheduleDate = LocalDate.now().plusDays(1);
+        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+        schedule.setScheduleDate(scheduleDate);
+        pixPaymentDto.setSchedule(schedule);
 
-    if (scheduledAmount == null) {
-        return;
+        when(bspiRequestUtils.createBspiPaymentRequest(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("M0076"));
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_NEXT_DAY_NIGHT_LIMIT_EXCEEDED));
+
+            try {
+                fixture.validation(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertEquals(context.transactionAmount(), new BigDecimal("1500"));
+                assertFalse(context.sameOwnership());
+                assertEquals(context.scheduleDate(), scheduleDate);
+                assertTrue(context.isAgendamento());
+                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
+                assertEquals(context.nextAvailableScheduleDate(), scheduleDate.plusDays(1));
+            }
+        }
     }
 
-    NextError nextError = PIX_LIMIT_UPDATE_SCHEDULED_AMOUNT_EXCEEDED;
-    String[] messageParams = {formatCurrency(scheduledAmount)};
+    @Test
+    public void validation_semAgendamento_deveConstruirContextoComScheduleDateEIsAgendamentoNulos() {
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setSchedule(null);
 
-    LOG.info("Pix limit update warning. conditionLimitCode: [{}], currentLimit: [{}], newLimit: [{}], scheduledAmount: [{}]", request.getConditionLimitCode(), currentLimitAmount, newLimitAmount, scheduledAmount);
+        when(bspiRequestUtils.createBspiPaymentRequest(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("M0076"));
 
-    throw new UnprocessableEntityException(nextError.getCode(), nextError, messageParams);
-}
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.empty());
 
-private void validateScheduledPixRequestData(PixLimitUpdateRequest request) {
-    if (request.getBranch() == null || request.getAccount() == null) {
-        throw new IllegalArgumentException("Branch and account are required to validate Pix scheduled payments");
+            try {
+                fixture.validation(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertNull(context.scheduleDate());
+                assertFalse(context.isAgendamento());
+                assertNull(context.nextAvailableScheduleDate());
+            }
+        }
+    }
+
+    @Test
+    public void validation_quandoCodigoNaoEM0076_naoDeveDelegarParaResolver() {
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        when(bspiRequestUtils.createBspiPaymentRequest(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("E1223"));
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class, CALLS_REAL_METHODS)) {
+            try {
+                fixture.validation(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(any()), never());
+            }
+        }
+    }
+
+    @Test
+    public void validationV2_whenCoreBankingExceptionReturnsM0076_deveDelegarParaResolver() {
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setTransactionAmount(new BigDecimal("600"));
+        pixPaymentDto.setSameOwnership(false);
+
+        LocalDate scheduleDate = LocalDate.now().plusDays(1);
+        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+        schedule.setScheduleDate(scheduleDate);
+        pixPaymentDto.setSchedule(schedule);
+
+        when(bspiRequestUtils.createBspiPaymentV2Request(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("M0076"));
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
+
+            try {
+                fixture.validationV2(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertEquals(context.transactionAmount(), new BigDecimal("600"));
+                assertFalse(context.sameOwnership());
+                assertEquals(context.scheduleDate(), scheduleDate);
+                assertTrue(context.isAgendamento());
+                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
+            }
+        }
+    }
+
+    @Test
+    public void validationV3_whenFeignCustomExceptionReturnsM0076_deveDelegarParaResolver() {
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setTransactionAmount(new BigDecimal("300"));
+        pixPaymentDto.setSameOwnership(false);
+
+        LocalDate scheduleDate = LocalDate.now().plusDays(1);
+        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+        schedule.setScheduleDate(scheduleDate);
+        pixPaymentDto.setSchedule(schedule);
+
+        BspiPaymentV2Builder bspiPaymentV2Builder = getBspiPaymentV2Request();
+        when(bspiRequestUtils.createBspiPaymentV2Request(any(PixPaymentDto.class))).thenReturn(bspiPaymentV2Builder);
+
+        FeignCustomException feignCustomException = FeignCustomExceptionBuilder.createWithCode("M0076");
+        when(paymentApiClient.intentionPaymentV3(any(), any(), any())).thenThrow(feignCustomException);
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
+
+            try {
+                fixture.validationV3(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertEquals(context.transactionAmount(), new BigDecimal("300"));
+                assertFalse(context.sameOwnership());
+                assertEquals(context.scheduleDate(), scheduleDate);
+                assertTrue(context.isAgendamento());
+                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
+            }
+        }
+    }
+
+    @Test
+    public void validationV3_quandoCodigoNaoEM0076_naoDeveDelegarParaResolver() {
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        BspiPaymentV2Builder bspiPaymentV2Builder = getBspiPaymentV2Request();
+        when(bspiRequestUtils.createBspiPaymentV2Request(any(PixPaymentDto.class))).thenReturn(bspiPaymentV2Builder);
+
+        FeignCustomException feignCustomException = FeignCustomExceptionBuilder.createWithCode("E4006");
+        when(paymentApiClient.intentionPaymentV3(any(), any(), any())).thenThrow(feignCustomException);
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class, CALLS_REAL_METHODS)) {
+            try {
+                fixture.validationV3(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(any()), never());
+            }
+        }
     }
 }
-
-private BigDecimal getHighestScheduledAmountAboveNewLimit(String customerCpf, PixLimitUpdateRequest request, BigDecimal newLimitAmount) {
-    PixPaymentScheduleListDto scheduleListDto = createPixPaymentScheduleListDto(customerCpf, request);
-    PixPaymentScheduleListResponse scheduleListResponse = pixPaymentScheduleService.retrieveSchedules(scheduleListDto);
-    List<PixPaymentScheduleResponse> schedules = getSchedules(scheduleListResponse);
-
-    if (schedules.isEmpty()) {
-        return null;
-    }
-
-    Map<LocalDate, BigDecimal> scheduledAmountByDate = schedules.stream()
-            .filter(Objects::nonNull)
-            .filter(schedule -> getScheduleDate(schedule) != null)
-            .filter(schedule -> getScheduleAmount(schedule) != null)
-            .collect(Collectors.groupingBy(this::getScheduleDate, Collectors.reducing(BigDecimal.ZERO, this::getScheduleAmount, BigDecimal::add)));
-
-    return scheduledAmountByDate.values().stream().filter(total -> total.compareTo(newLimitAmount) > 0).max(BigDecimal::compareTo).orElse(null);
-}
-
-private PixPaymentScheduleListDto createPixPaymentScheduleListDto(String customerCpf, PixLimitUpdateRequest request) {
-    PixPaymentScheduleListDto scheduleListDto = new PixPaymentScheduleListDto();
-    scheduleListDto.setCpf(customerCpf);
-    scheduleListDto.setBranch(request.getBranch());
-    scheduleListDto.setAccount(request.getAccount());
-    scheduleListDto.setAccountType(request.getAccountType());
-    scheduleListDto.setStartDate(LocalDate.now());
-    scheduleListDto.setEndDate(LocalDate.now().plusYears(PIX_SCHEDULE_LOOKAHEAD_YEARS));
-    scheduleListDto.setPage(null);
-    scheduleListDto.setPageSize(null);
-    return scheduleListDto;
-}
-
-private String formatCurrency(BigDecimal value) {
-    return NumberFormat.getCurrencyInstance(new Locale("pt", "BR")).format(value);
-}
-
-
-// =================================================================================================
-// 9. PixLimitServiceImpl.java
-// ESTES SÃO OS ÚNICOS 3 MÉTODOS QUE VOCÊ PODE PRECISAR AJUSTAR DE ACORDO COM OS NOMES REAIS
-// DO SEU PixPaymentScheduleListResponse E PixPaymentScheduleResponse.
-// A REGRA DE NEGÓCIO NÃO PRECISA SER ALTERADA.
-// =================================================================================================
-
-private List<PixPaymentScheduleResponse> getSchedules(PixPaymentScheduleListResponse response) {
-    return Optional.ofNullable(response).map(PixPaymentScheduleListResponse::getSchedules).orElse(Collections.emptyList());
-}
-
-private LocalDate getScheduleDate(PixPaymentScheduleResponse schedule) {
-    return schedule.getScheduledDate();
-}
-
-private BigDecimal getScheduleAmount(PixPaymentScheduleResponse schedule) {
-    return schedule.getAmount();
-}
-
-
-// =================================================================================================
-// 10. PixLimitController.java
-// O CONTROLLER NÃO PRECISA MUDAR CASO branch/account/accountType/currentLimitAmount VENHAM NO BODY.
-// PODE CONTINUAR EXATAMENTE ASSIM.
-// =================================================================================================
-
-@ApiOperation(value = "Update Limit V2")
-@PutMapping(path = PATH_V2 + "/update", produces = APPLICATION_JSON_VALUE)
-public ResponseEntity<PixUpdateLimitResponse> updateLimitV2(
-        @RequestHeader(value = AUTH_HEADER_NAME) String token,
-        @Cpf String customerCpf,
-        @RequestBody @Valid PixLimitUpdateRequest request) {
-    return ResponseEntity.ok().body(service.updateLimit(customerCpf, request));
-}
-
-
-// =================================================================================================
-// 11. EXEMPLO DO BODY QUE O APP PASSARIA PARA O UPDATE.
-// NÃO É CÓDIGO JAVA; É SOMENTE PARA VOCÊ ENTENDER OS CAMPOS NOVOS.
-// =================================================================================================
-
-// {
-//   "conditionLimitCode": 6731,
-//   "limitAmount": 1000.00,
-//   "currentLimitAmount": 5000.00,
-//   "branch": 1234,
-//   "account": 12345678,
-//   "accountType": "...",
-//   ...demais campos que já existem no PixLimitUpdateRequest
-// }
-
-
-// =================================================================================================
-// RESULTADO DA REGRA
-//
-// conditionLimitCode != 6731
-//      -> NÃO consulta agendamentos
-//
-// conditionLimitCode == 6731 e novo limite >= limite atual
-//      -> NÃO consulta agendamentos
-//
-// conditionLimitCode == 6731 e novo limite < limite atual
-//      -> consulta Pix agendados
-//      -> agrupa por data
-//      -> soma todos os valores da mesma data
-//
-// Exemplo:
-//
-// 25/08 = R$ 500 + R$ 700 + R$ 300 = R$ 1.500
-// 26/08 = R$ 400
-//
-// Novo limite = R$ 1.000
-//
-// Como 25/08 possui R$ 1.500 e R$ 1.500 > R$ 1.000:
-//      -> lança NEXT_PIX_LIMIT_UPDATE_WARNING_001
-//      -> strings.properties monta a mensagem usando R$ 1.500,00
-//      -> app identifica o código e abre o modal
-//
-// Nenhuma data acima do novo limite:
-//      -> fluxo continua normalmente
-//      -> createUpdateLimitModel(request)
-//      -> liopSelfManagementEngClient.createOrUpdateLimit(...)
-// =================================================================================================
