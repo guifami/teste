@@ -1,264 +1,114 @@
 package br.com.bradesco.next.pix.payment.service;
 
-import br.com.bradesco.next.common.client.FeignCustomException;
-import br.com.bradesco.next.common.strings.StringBundle;
-import br.com.bradesco.next.common.web.exception.UnprocessableEntityException;
-import br.com.bradesco.next.corebank.api.bspi.BspiHeader;
-import br.com.bradesco.next.corebank.api.bspi.consultadadosconta.AccountDataMessageResponse;
-import br.com.bradesco.next.corebank.api.bspi.consultadadosconta.BspiApiAccountDataRetrieveFeignClient;
-import br.com.bradesco.next.corebank.api.bspi.pagamento.BspiPaymentFeignClient;
-import br.com.bradesco.next.corebank.api.util.CoreBankingException;
-import br.com.bradesco.next.pix.payment.builder.FeignCustomExceptionBuilder;
-import br.com.bradesco.next.pix.payment.client.PaymentApiClient;
-import br.com.bradesco.next.pix.payment.domain.builder.BspiPaymentV2Builder;
-import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentDto;
-import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076ContextDto;
-import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentScheduleDto;
-import br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError;
-import br.com.bradesco.next.pix.payment.utils.PixParametersUtil;
-import br.com.bradesco.next.pix.payment.utils.PixPaymentM0076RuleResolver;
-import br.com.bradesco.next.pix.payment.utils.PixPaymentValidationResponseBuilder;
-import org.mockito.ArgumentCaptor;
+import br.com.bradesco.next.client.next.pix.schedule.NextPixScheduleClient;
+import br.com.bradesco.next.client.next.pix.schedule.dto.PixScheduleDto;
+import br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse;
+import feign.FeignException;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import java.util.Arrays;
 
-import static br.com.bradesco.next.pix.payment.builder.PixPaymentBuilder.getBspiPaymentV2Request;
-import static br.com.bradesco.next.pix.payment.builder.PixPaymentRequestBuilder.getPixPaymentDto;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.CALLS_REAL_METHODS;
-import static org.mockito.Mockito.mockStatic;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNull;
-import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
-public class PixPaymentValidationServiceM0076Test {
+public class PixScheduleQueryServiceTest {
+
+    private static final String TOKEN = "token";
+    private static final LocalDate DATE = LocalDate.of(2026, 8, 28);
 
     @InjectMocks
-    private PixPaymentValidationService fixture;
+    private PixScheduleQueryService fixture;
 
     @Mock
-    private BspiApiAccountDataRetrieveFeignClient bspiApiAccountDataRetrieveFeignClient;
-
-    @Mock
-    private BspiRequestService bspiRequestUtils;
-
-    @Mock
-    private BspiPaymentFeignClient bspiPaymentFeignClient;
-
-    @Mock
-    private PixStatisticDataService pixStatisticDataService;
-
-    @Mock
-    private PixPaymentInternalAccountValidatorService pixPaymentInternalAccountValidatorService;
-
-    @Mock
-    private PixPaymentValidationResponseBuilder pixPaymentValidationResponseUtil;
-
-    @Mock
-    private StringBundle strings;
-
-    @Mock
-    private PaymentApiClient paymentApiClient;
-
-    @Mock
-    private PixParametersUtil pixParametersUtil;
-
-    @Mock
-    private PixScheduleQueryService pixScheduleQueryService;
+    private NextPixScheduleClient nextPixScheduleClient;
 
     @BeforeMethod
     public void setUp() {
         MockitoAnnotations.openMocks(this);
-        when(pixStatisticDataService.getEndToEndConfirmationCode(any(PixPaymentDto.class))).thenReturn(Optional.empty());
-        when(bspiApiAccountDataRetrieveFeignClient.accountData(any(BspiHeader.class), anyInt(), anyInt())).thenReturn(new AccountDataMessageResponse());
-        when(pixScheduleQueryService.getScheduledAmountForDate(any(), any(LocalDate.class))).thenReturn(BigDecimal.ZERO);
-    }
-
-    private CoreBankingException coreBankingExceptionWithCode(String codigoRetorno) {
-        Map<String, Object> jsonBody = new HashMap<>();
-        jsonBody.put("codigoRetorno", codigoRetorno);
-        return new CoreBankingException(400, "APIFail", "API", jsonBody);
     }
 
     @Test
-    public void validation_whenCoreBankingExceptionReturnsM0076_deveDelegarParaResolverComContextoCorreto() {
-        PixPaymentDto pixPaymentDto = getPixPaymentDto();
-        pixPaymentDto.setTransactionAmount(new BigDecimal("1500"));
-        pixPaymentDto.setSameOwnership(false);
-
-        LocalDate scheduleDate = LocalDate.now().plusDays(1);
-        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
-        schedule.setScheduleDate(scheduleDate);
-        pixPaymentDto.setSchedule(schedule);
-
-        when(bspiRequestUtils.createBspiPaymentRequest(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("M0076"));
-
-        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_NEXT_DAY_NIGHT_LIMIT_EXCEEDED));
-
-            try {
-                fixture.validation(pixPaymentDto);
-                fail("Era esperado o lançamento de UnprocessableEntityException");
-            } catch (UnprocessableEntityException expected) {
-                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
-                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
-
-                PixPaymentM0076ContextDto context = captor.getValue();
-                assertEquals(context.transactionAmount(), new BigDecimal("1500"));
-                assertFalse(context.sameOwnership());
-                assertEquals(context.scheduleDate(), scheduleDate);
-                assertTrue(context.isAgendamento());
-                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
-                assertEquals(context.nextAvailableScheduleDate(), scheduleDate.plusDays(1));
-            }
-        }
+    public void getScheduledAmountForDate_quandoTokenNulo_deveRetornarZero() {
+        BigDecimal result = fixture.getScheduledAmountForDate(null, DATE);
+        assertEquals(result, BigDecimal.ZERO);
+        verify(nextPixScheduleClient, never()).getV3ListSchedulesPaginated(isNull(), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
     }
 
     @Test
-    public void validation_semAgendamento_deveConstruirContextoComScheduleDateEIsAgendamentoNulos() {
-        PixPaymentDto pixPaymentDto = getPixPaymentDto();
-        pixPaymentDto.setSchedule(null);
-
-        when(bspiRequestUtils.createBspiPaymentRequest(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("M0076"));
-
-        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.empty());
-
-            try {
-                fixture.validation(pixPaymentDto);
-                fail("Era esperado o lançamento de UnprocessableEntityException");
-            } catch (UnprocessableEntityException expected) {
-                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
-                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
-
-                PixPaymentM0076ContextDto context = captor.getValue();
-                assertNull(context.scheduleDate());
-                assertFalse(context.isAgendamento());
-                assertNull(context.nextAvailableScheduleDate());
-            }
-        }
+    public void getScheduledAmountForDate_quandoDataNula_deveRetornarZero() {
+        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, null);
+        assertEquals(result, BigDecimal.ZERO);
+        verify(nextPixScheduleClient, never()).getV3ListSchedulesPaginated(eq(TOKEN), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
     }
 
     @Test
-    public void validation_quandoCodigoNaoEM0076_naoDeveDelegarParaResolver() {
-        PixPaymentDto pixPaymentDto = getPixPaymentDto();
-        when(bspiRequestUtils.createBspiPaymentRequest(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("E1223"));
-
-        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class, CALLS_REAL_METHODS)) {
-            try {
-                fixture.validation(pixPaymentDto);
-                fail("Era esperado o lançamento de UnprocessableEntityException");
-            } catch (UnprocessableEntityException expected) {
-                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(any()), never());
-            }
-        }
+    public void getScheduledAmountForDate_quandoResponseNulo_deveRetornarZero() {
+        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(null);
+        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
+        assertEquals(result, BigDecimal.ZERO);
     }
 
     @Test
-    public void validationV2_whenCoreBankingExceptionReturnsM0076_deveDelegarParaResolver() {
-        PixPaymentDto pixPaymentDto = getPixPaymentDto();
-        pixPaymentDto.setTransactionAmount(new BigDecimal("600"));
-        pixPaymentDto.setSameOwnership(false);
-
-        LocalDate scheduleDate = LocalDate.now().plusDays(1);
-        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
-        schedule.setScheduleDate(scheduleDate);
-        pixPaymentDto.setSchedule(schedule);
-
-        when(bspiRequestUtils.createBspiPaymentV2Request(any(PixPaymentDto.class))).thenThrow(coreBankingExceptionWithCode("M0076"));
-
-        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
-
-            try {
-                fixture.validationV2(pixPaymentDto);
-                fail("Era esperado o lançamento de UnprocessableEntityException");
-            } catch (UnprocessableEntityException expected) {
-                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
-                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
-
-                PixPaymentM0076ContextDto context = captor.getValue();
-                assertEquals(context.transactionAmount(), new BigDecimal("600"));
-                assertFalse(context.sameOwnership());
-                assertEquals(context.scheduleDate(), scheduleDate);
-                assertTrue(context.isAgendamento());
-                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
-            }
-        }
+    public void getScheduledAmountForDate_quandoSchedulesNulo_deveRetornarZero() {
+        PixScheduleResponse response = mock(PixScheduleResponse.class);
+        when(response.getSchedules()).thenReturn(null);
+        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(response);
+        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
+        assertEquals(result, BigDecimal.ZERO);
     }
 
     @Test
-    public void validationV3_whenFeignCustomExceptionReturnsM0076_deveDelegarParaResolver() {
-        PixPaymentDto pixPaymentDto = getPixPaymentDto();
-        pixPaymentDto.setTransactionAmount(new BigDecimal("300"));
-        pixPaymentDto.setSameOwnership(false);
-
-        LocalDate scheduleDate = LocalDate.now().plusDays(1);
-        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
-        schedule.setScheduleDate(scheduleDate);
-        pixPaymentDto.setSchedule(schedule);
-
-        BspiPaymentV2Builder bspiPaymentV2Builder = getBspiPaymentV2Request();
-        when(bspiRequestUtils.createBspiPaymentV2Request(any(PixPaymentDto.class))).thenReturn(bspiPaymentV2Builder);
-
-        FeignCustomException feignCustomException = FeignCustomExceptionBuilder.createWithCode("M0076");
-        when(paymentApiClient.intentionPaymentV3(any(), any(), any())).thenThrow(feignCustomException);
-
-        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
-            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
-
-            try {
-                fixture.validationV3(pixPaymentDto);
-                fail("Era esperado o lançamento de UnprocessableEntityException");
-            } catch (UnprocessableEntityException expected) {
-                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
-                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
-
-                PixPaymentM0076ContextDto context = captor.getValue();
-                assertEquals(context.transactionAmount(), new BigDecimal("300"));
-                assertFalse(context.sameOwnership());
-                assertEquals(context.scheduleDate(), scheduleDate);
-                assertTrue(context.isAgendamento());
-                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
-            }
-        }
+    public void getScheduledAmountForDate_quandoFeignException_deveRetornarZero() {
+        FeignException exception = mock(FeignException.class);
+        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenThrow(exception);
+        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
+        assertEquals(result, BigDecimal.ZERO);
     }
 
     @Test
-    public void validationV3_quandoCodigoNaoEM0076_naoDeveDelegarParaResolver() {
-        PixPaymentDto pixPaymentDto = getPixPaymentDto();
-        BspiPaymentV2Builder bspiPaymentV2Builder = getBspiPaymentV2Request();
-        when(bspiRequestUtils.createBspiPaymentV2Request(any(PixPaymentDto.class))).thenReturn(bspiPaymentV2Builder);
+    public void getScheduledAmountForDate_deveIgnorarInvalidosCanceladosENulosESomarValoresValidos() throws Exception {
+        PixScheduleResponse response = mock(PixScheduleResponse.class);
 
-        FeignCustomException feignCustomException = FeignCustomExceptionBuilder.createWithCode("E4006");
-        when(paymentApiClient.intentionPaymentV3(any(), any(), any())).thenThrow(feignCustomException);
+        PixScheduleDto canceledSchedule = mock(PixScheduleDto.class);
+        Class<?> cancelationReasonType = PixScheduleDto.class.getMethod("getCancelationReason").getReturnType();
+        Object cancelationReason = cancelationReasonType.isEnum() ? cancelationReasonType.getEnumConstants()[0] : mock(cancelationReasonType);
+        doReturn(cancelationReason).when(canceledSchedule).getCancelationReason();
 
-        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class, CALLS_REAL_METHODS)) {
-            try {
-                fixture.validationV3(pixPaymentDto);
-                fail("Era esperado o lançamento de UnprocessableEntityException");
-            } catch (UnprocessableEntityException expected) {
-                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(any()), never());
-            }
-        }
+        PixScheduleDto withoutPaymentData = mock(PixScheduleDto.class);
+
+        PixScheduleDto nullOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+        when(nullOperationValue.getPaymentData().getOperationValue()).thenReturn(null);
+
+        PixScheduleDto blankOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+        when(blankOperationValue.getPaymentData().getOperationValue()).thenReturn("   ");
+
+        PixScheduleDto invalidOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+        when(invalidOperationValue.getPaymentData().getOperationValue()).thenReturn("valor-invalido");
+
+        PixScheduleDto validSchedule1 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+        when(validSchedule1.getPaymentData().getOperationValue()).thenReturn("100.50");
+
+        PixScheduleDto validSchedule2 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+        when(validSchedule2.getPaymentData().getOperationValue()).thenReturn("200.25");
+
+        when(response.getSchedules()).thenReturn(Arrays.asList(null, canceledSchedule, withoutPaymentData, nullOperationValue, blankOperationValue, invalidOperationValue, validSchedule1, validSchedule2));
+        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(response);
+
+        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
+
+        assertEquals(result, new BigDecimal("300.75"));
     }
 }
