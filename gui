@@ -1,84 +1,91 @@
-@Test
-public void getScheduledAmountForDate_deveIgnorarInvalidosCanceladosENulosESomarValoresValidos() throws Exception {
-    PixScheduleResponse response = mock(PixScheduleResponse.class);
-
-    PixScheduleDto canceledSchedule = mock(PixScheduleDto.class);
-    Class<?> cancelationReasonType = PixScheduleDto.class.getMethod("getCancelationReason").getReturnType();
-    Object cancelationReason = cancelationReasonType.isEnum() ? cancelationReasonType.getEnumConstants()[0] : mock(cancelationReasonType);
-    doReturn(cancelationReason).when(canceledSchedule).getCancelationReason();
-
-    PixScheduleDto withoutPaymentData = mock(PixScheduleDto.class);
-    when(withoutPaymentData.getCancelationReason()).thenReturn(null);
-
-    PixScheduleDto nullOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-    when(nullOperationValue.getCancelationReason()).thenReturn(null);
-    when(nullOperationValue.getPaymentData().getOperationValue()).thenReturn(null);
-
-    PixScheduleDto blankOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-    when(blankOperationValue.getCancelationReason()).thenReturn(null);
-    when(blankOperationValue.getPaymentData().getOperationValue()).thenReturn(" ");
-
-    PixScheduleDto invalidOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-    when(invalidOperationValue.getCancelationReason()).thenReturn(null);
-    when(invalidOperationValue.getPaymentData().getOperationValue()).thenReturn("valor-invalido");
-
-    PixScheduleDto validSchedule1 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-    when(validSchedule1.getCancelationReason()).thenReturn(null);
-    when(validSchedule1.getPaymentData().getOperationValue()).thenReturn("100.50");
-
-    PixScheduleDto validSchedule2 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-    when(validSchedule2.getCancelationReason()).thenReturn(null);
-    when(validSchedule2.getPaymentData().getOperationValue()).thenReturn("200.25");
-
-    when(response.getSchedules()).thenReturn(Arrays.asList(null, canceledSchedule, withoutPaymentData, nullOperationValue, blankOperationValue, invalidOperationValue, validSchedule1, validSchedule2));
-    when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(response);
-
-    BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
-
-    assertEquals(result, new BigDecimal("300.75"));
-}
-
-
-
-
-
-
 package br.com.bradesco.next.pix.payment.service;
 
-import br.com.bradesco.next.client.next.pix.schedule.NextPixScheduleClient;
-import br.com.bradesco.next.client.next.pix.schedule.dto.PixScheduleDto;
-import br.com.bradesco.next.client.next.pix.schedule.response.PixScheduleResponse;
-import feign.FeignException;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.AgendamentoIntencaoV2;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.InfoIntencaoAgendamentoAgendamentoIntencaoV2;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.InfoIntencaoOnline;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.IntencaoAgendamentoResponseV2;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.IntencaoOnlineResponse;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.IntencaoResponseV2;
+import br.com.bradesco.next.client.brad.transc.bspi.srv.c1py.model.LimiteAgendamento;
+import br.com.bradesco.next.common.client.FeignCustomException;
+import br.com.bradesco.next.common.strings.StringBundle;
+import br.com.bradesco.next.common.web.exception.UnprocessableEntityException;
+import br.com.bradesco.next.corebank.api.bspi.BspiHeader;
+import br.com.bradesco.next.corebank.api.bspi.consultadadosconta.AccountDataMessageResponse;
+import br.com.bradesco.next.corebank.api.bspi.consultadadosconta.BspiApiAccountDataRetrievalEngClient;
+import br.com.bradesco.next.corebank.api.bspi.efetivalancamento.BspiDeviceData;
+import br.com.bradesco.next.pix.payment.builder.FeignCustomExceptionBuilder;
+import br.com.bradesco.next.pix.payment.client.PaymentApiClient;
+import br.com.bradesco.next.pix.payment.domain.builder.BspiPaymentIntentionV2Builder;
+import br.com.bradesco.next.pix.payment.domain.builder.BspiPaymentV2Builder;
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentDto;
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076ContextDto;
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentScheduleDto;
+import br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError;
+import br.com.bradesco.next.pix.payment.domain.response.PixPaymentValidationResponse;
+import br.com.bradesco.next.pix.payment.utils.PixPaymentM0076RuleResolver;
+import br.com.bradesco.next.pix.payment.utils.PixPaymentValidationResponseBuilder;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
 
+import static br.com.bradesco.next.pix.payment.builder.PixPaymentBuilder.getBspiPaymentV2Request;
+import static br.com.bradesco.next.pix.payment.builder.PixPaymentRequestBuilder.getPixPaymentDto;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 
-public class PixScheduleQueryServiceTest {
+public class PixPaymentValidationServiceV3Test {
 
-    private static final String TOKEN = "token";
-    private static final LocalDate DATE = LocalDate.of(2026, 8, 28);
+    private static final String CONFIRMATION_CODE = "E6074694820200914142251234aLqTWg";
 
     @InjectMocks
-    private PixScheduleQueryService fixture;
+    private PixPaymentValidationService fixture;
 
     @Mock
-    private NextPixScheduleClient nextPixScheduleClient;
+    private BspiApiAccountDataRetrievalEngClient bspiApiAccountDataRetrievalEngClient;
+
+    @Mock
+    private BspiRequestService bspiRequestUtils;
+
+    @Mock
+    private PaymentApiClient bspiPaymentEngClient;
+
+    @Mock
+    private PixStatisticDataService pixStatisticDataService;
+
+    @Mock
+    private PixPaymentInternalAccountValidatorService pixPaymentInternalAccountValidatorService;
+
+    @Mock
+    private PixPaymentValidationResponseBuilder pixPaymentValidationResponseUtil;
+
+    @Mock
+    private StringBundle strings;
+
+    @Mock
+    private PixScheduleQueryService pixScheduleQueryService;
 
     @BeforeMethod
     public void setUp() {
@@ -86,74 +93,211 @@ public class PixScheduleQueryServiceTest {
     }
 
     @Test
-    public void getScheduledAmountForDate_quandoTokenNulo_deveRetornarZero() {
-        BigDecimal result = fixture.getScheduledAmountForDate(null, DATE);
-        assertEquals(result, BigDecimal.ZERO);
-        verify(nextPixScheduleClient, never()).getV3ListSchedulesPaginated(isNull(), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
+    void validation_successV3() {
+        mockServiceCallPaymentValidation();
+        doReturn(getBspiPaymentV2Request()).when(bspiRequestUtils).createBspiPaymentV2Request(any(PixPaymentDto.class));
+        BspiPaymentIntentionV2Builder resp = createMockBspiPaymentIntentionV3Response();
+        when(bspiPaymentEngClient.intentionPaymentV3(any(), any(), any())).thenReturn(resp);
+        when(pixPaymentValidationResponseUtil.createPixPaymentValidationV2Response(any(BspiPaymentIntentionV2Builder.class))).thenReturn(new PixPaymentValidationResponse());
+
+        PixPaymentValidationResponse result = fixture.validationV3(getPixPaymentDto());
+
+        assertNotNull(result);
+    }
+
+    private BspiPaymentIntentionV2Builder createMockBspiPaymentIntentionV3Response() {
+        IntencaoResponseV2 intencaoResponse = new IntencaoResponseV2();
+        intencaoResponse.setAgendamento(createIntencaoAgendamentoResponse());
+        intencaoResponse.setOnline(createIntencaoOnlineResponse());
+        return new BspiPaymentIntentionV2Builder(intencaoResponse);
+    }
+
+    private IntencaoOnlineResponse createIntencaoOnlineResponse() {
+        var intencaoOnlineResponse = new IntencaoOnlineResponse();
+        intencaoOnlineResponse.setCodigo("1");
+        intencaoOnlineResponse.setDescricao("description");
+
+        var infoIntencaoOnline = new InfoIntencaoOnline();
+        infoIntencaoOnline.setLimite(10);
+        infoIntencaoOnline.setE2e("1kh312kj3hj12312jhj123");
+        infoIntencaoOnline.setTarifa("10");
+        infoIntencaoOnline.setTransacaoDuplicada(InfoIntencaoOnline.TransacaoDuplicadaEnum.N);
+        infoIntencaoOnline.setCodigoA(InfoIntencaoOnline.CodigoAEnum.N);
+        infoIntencaoOnline.setSaldo("1000.00");
+
+        intencaoOnlineResponse.setInfo(infoIntencaoOnline);
+        return intencaoOnlineResponse;
+    }
+
+    private IntencaoAgendamentoResponseV2 createIntencaoAgendamentoResponse() {
+        var intencaoAgendamentoResponse = new IntencaoAgendamentoResponseV2();
+        intencaoAgendamentoResponse.setCodigo("1");
+        intencaoAgendamentoResponse.setDescricao("description");
+
+        var infoIntencaoAgendamento = new InfoIntencaoAgendamentoAgendamentoIntencaoV2();
+        infoIntencaoAgendamento.setStatus(InfoIntencaoAgendamentoAgendamentoIntencaoV2.StatusEnum.S);
+        infoIntencaoAgendamento.setE2e("1j2g3j12g31jgj3");
+
+        var agendamentoIntencao = createAgendamentoIntencao();
+        infoIntencaoAgendamento.setAgendamento(List.of(agendamentoIntencao));
+        intencaoAgendamentoResponse.setInfo(infoIntencaoAgendamento);
+        return intencaoAgendamentoResponse;
+    }
+
+    private AgendamentoIntencaoV2 createAgendamentoIntencao() {
+        var agendamentoIntencao = new AgendamentoIntencaoV2();
+        agendamentoIntencao.setData("22.08.2024");
+        agendamentoIntencao.setStatus(AgendamentoIntencaoV2.StatusEnum.NUMBER_1);
+        agendamentoIntencao.setTarifa("10");
+        agendamentoIntencao.setTransacaoDuplicada("N");
+
+        var limite = new LimiteAgendamento();
+        limite.setAgendado("5");
+        limite.setTotal("10");
+        limite.setDisponivelParaAgendamento("5");
+
+        agendamentoIntencao.setLimite(limite);
+        return agendamentoIntencao;
+    }
+
+    @Test(expectedExceptions = {UnprocessableEntityException.class})
+    public void testPixPaymentValidationExceptionUnprocessableEntityException() {
+        mockServiceCallPaymentValidation();
+        doReturn(getBspiPaymentV2Request()).when(bspiRequestUtils).createBspiPaymentV2Request(any(PixPaymentDto.class));
+        doReturn(null).when(bspiPaymentEngClient).intentionPaymentV3(any(BspiHeader.class), any(BspiDeviceData.class), any(BspiPaymentV2Builder.class));
+        when(pixPaymentValidationResponseUtil.createPixPaymentValidationV2Response(any(BspiPaymentIntentionV2Builder.class))).thenReturn(new PixPaymentValidationResponse());
+
+        fixture.validationV3(getPixPaymentDto());
+    }
+
+    @Test(expectedExceptions = {UnprocessableEntityException.class})
+    public void testPixPaymentValidationExceptionFeignCustomException() {
+        mockServiceCallPaymentValidation();
+        doReturn(getBspiPaymentV2Request()).when(bspiRequestUtils).createBspiPaymentV2Request(any(PixPaymentDto.class));
+        when(bspiPaymentEngClient.intentionPaymentV3(any(BspiHeader.class), any(), any())).thenThrow(new FeignCustomException(500, "intentionPaymentV3", null, new ObjectMapper()));
+        when(pixPaymentValidationResponseUtil.createPixPaymentValidationV2Response(any())).thenReturn(new PixPaymentValidationResponse());
+
+        fixture.validationV3(getPixPaymentDto());
     }
 
     @Test
-    public void getScheduledAmountForDate_quandoDataNula_deveRetornarZero() {
-        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, null);
-        assertEquals(result, BigDecimal.ZERO);
-        verify(nextPixScheduleClient, never()).getV3ListSchedulesPaginated(eq(TOKEN), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
+    public void validationV3_quandoM0076ComAgendamento_deveConsultarScheduleEConstruirContexto() {
+        mockServiceCallPaymentValidation();
+
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setTransactionAmount(new BigDecimal("600"));
+        pixPaymentDto.setSameOwnership(false);
+
+        LocalDate scheduleDate = LocalDate.now().plusDays(1);
+        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+        schedule.setScheduleDate(scheduleDate);
+        pixPaymentDto.setSchedule(schedule);
+
+        doReturn(getBspiPaymentV2Request()).when(bspiRequestUtils).createBspiPaymentV2Request(any(PixPaymentDto.class));
+        when(bspiPaymentEngClient.intentionPaymentV3(any(), any(), any())).thenThrow(FeignCustomExceptionBuilder.createWithCode("M0076"));
+        when(pixScheduleQueryService.getScheduledAmountForDate(any(), eq(scheduleDate))).thenReturn(new BigDecimal("500"));
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
+
+            try {
+                fixture.validationV3(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertEquals(context.transactionAmount(), new BigDecimal("600"));
+                assertFalse(context.sameOwnership());
+                assertEquals(context.scheduleDate(), scheduleDate);
+                assertNotNull(context.creationDateTime());
+                assertTrue(context.isAgendamento());
+                assertEquals(context.existingScheduledAmountForDate(), new BigDecimal("500"));
+                assertEquals(context.nextAvailableScheduleDate(), scheduleDate.plusDays(1));
+                verify(pixScheduleQueryService).getScheduledAmountForDate(any(), eq(scheduleDate));
+            }
+        }
     }
 
     @Test
-    public void getScheduledAmountForDate_quandoResponseNulo_deveRetornarZero() {
-        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(null);
-        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
-        assertEquals(result, BigDecimal.ZERO);
+    public void validationV3_quandoM0076SemAgendamento_deveUsarZeroENaoConsultarSchedule() {
+        mockServiceCallPaymentValidation();
+
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setTransactionAmount(new BigDecimal("300"));
+        pixPaymentDto.setSameOwnership(false);
+        pixPaymentDto.setSchedule(null);
+
+        doReturn(getBspiPaymentV2Request()).when(bspiRequestUtils).createBspiPaymentV2Request(any(PixPaymentDto.class));
+        when(bspiPaymentEngClient.intentionPaymentV3(any(), any(), any())).thenThrow(FeignCustomExceptionBuilder.createWithCode("M0076"));
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.empty());
+
+            try {
+                fixture.validationV3(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertEquals(context.transactionAmount(), new BigDecimal("300"));
+                assertFalse(context.sameOwnership());
+                assertNull(context.scheduleDate());
+                assertNotNull(context.creationDateTime());
+                assertFalse(context.isAgendamento());
+                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
+                assertNull(context.nextAvailableScheduleDate());
+                verify(pixScheduleQueryService, never()).getScheduledAmountForDate(any(), any());
+            }
+        }
     }
 
     @Test
-    public void getScheduledAmountForDate_quandoSchedulesNulo_deveRetornarZero() {
-        PixScheduleResponse response = mock(PixScheduleResponse.class);
-        when(response.getSchedules()).thenReturn(null);
-        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(response);
-        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
-        assertEquals(result, BigDecimal.ZERO);
+    public void validationV3_quandoM0076ComScheduleSemData_deveConsiderarAgendamentoSemConsultarSchedule() {
+        mockServiceCallPaymentValidation();
+
+        PixPaymentDto pixPaymentDto = getPixPaymentDto();
+        pixPaymentDto.setTransactionAmount(new BigDecimal("400"));
+        pixPaymentDto.setSameOwnership(false);
+
+        PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+        schedule.setScheduleDate(null);
+        pixPaymentDto.setSchedule(schedule);
+
+        doReturn(getBspiPaymentV2Request()).when(bspiRequestUtils).createBspiPaymentV2Request(any(PixPaymentDto.class));
+        when(bspiPaymentEngClient.intentionPaymentV3(any(), any(), any())).thenThrow(FeignCustomExceptionBuilder.createWithCode("M0076"));
+
+        try (MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+            resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any())).thenReturn(Optional.of(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
+
+            try {
+                fixture.validationV3(pixPaymentDto);
+                fail("Era esperado o lançamento de UnprocessableEntityException");
+            } catch (UnprocessableEntityException expected) {
+                ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+                resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+
+                PixPaymentM0076ContextDto context = captor.getValue();
+                assertEquals(context.transactionAmount(), new BigDecimal("400"));
+                assertFalse(context.sameOwnership());
+                assertNull(context.scheduleDate());
+                assertNotNull(context.creationDateTime());
+                assertTrue(context.isAgendamento());
+                assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
+                assertNull(context.nextAvailableScheduleDate());
+                verify(pixScheduleQueryService, never()).getScheduledAmountForDate(any(), any());
+            }
+        }
     }
 
-    @Test
-    public void getScheduledAmountForDate_quandoFeignException_deveRetornarZero() {
-        FeignException exception = mock(FeignException.class);
-        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenThrow(exception);
-        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
-        assertEquals(result, BigDecimal.ZERO);
-    }
-
-    @Test
-    public void getScheduledAmountForDate_deveIgnorarInvalidosCanceladosENulosESomarValoresValidos() throws Exception {
-        PixScheduleResponse response = mock(PixScheduleResponse.class);
-
-        PixScheduleDto canceledSchedule = mock(PixScheduleDto.class);
-        Class<?> cancelationReasonType = PixScheduleDto.class.getMethod("getCancelationReason").getReturnType();
-        Object cancelationReason = cancelationReasonType.isEnum() ? cancelationReasonType.getEnumConstants()[0] : mock(cancelationReasonType);
-        doReturn(cancelationReason).when(canceledSchedule).getCancelationReason();
-
-        PixScheduleDto withoutPaymentData = mock(PixScheduleDto.class);
-
-        PixScheduleDto nullOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-        when(nullOperationValue.getPaymentData().getOperationValue()).thenReturn(null);
-
-        PixScheduleDto blankOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-        when(blankOperationValue.getPaymentData().getOperationValue()).thenReturn("   ");
-
-        PixScheduleDto invalidOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-        when(invalidOperationValue.getPaymentData().getOperationValue()).thenReturn("valor-invalido");
-
-        PixScheduleDto validSchedule1 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-        when(validSchedule1.getPaymentData().getOperationValue()).thenReturn("100.50");
-
-        PixScheduleDto validSchedule2 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
-        when(validSchedule2.getPaymentData().getOperationValue()).thenReturn("200.25");
-
-        when(response.getSchedules()).thenReturn(Arrays.asList(null, canceledSchedule, withoutPaymentData, nullOperationValue, blankOperationValue, invalidOperationValue, validSchedule1, validSchedule2));
-        when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(response);
-
-        BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
-
-        assertEquals(result, new BigDecimal("300.75"));
+    private void mockServiceCallPaymentValidation() {
+        when(pixStatisticDataService.getEndToEndConfirmationCode(any(PixPaymentDto.class))).thenReturn(Optional.of(CONFIRMATION_CODE));
+        when(bspiApiAccountDataRetrievalEngClient.accountData(any(BspiHeader.class), anyInt(), anyInt())).thenReturn(new AccountDataMessageResponse());
     }
 }
