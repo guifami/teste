@@ -1,3 +1,48 @@
+@Test
+public void getScheduledAmountForDate_deveIgnorarInvalidosCanceladosENulosESomarValoresValidos() throws Exception {
+    PixScheduleResponse response = mock(PixScheduleResponse.class);
+
+    PixScheduleDto canceledSchedule = mock(PixScheduleDto.class);
+    Class<?> cancelationReasonType = PixScheduleDto.class.getMethod("getCancelationReason").getReturnType();
+    Object cancelationReason = cancelationReasonType.isEnum() ? cancelationReasonType.getEnumConstants()[0] : mock(cancelationReasonType);
+    doReturn(cancelationReason).when(canceledSchedule).getCancelationReason();
+
+    PixScheduleDto withoutPaymentData = mock(PixScheduleDto.class);
+    when(withoutPaymentData.getCancelationReason()).thenReturn(null);
+
+    PixScheduleDto nullOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+    when(nullOperationValue.getCancelationReason()).thenReturn(null);
+    when(nullOperationValue.getPaymentData().getOperationValue()).thenReturn(null);
+
+    PixScheduleDto blankOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+    when(blankOperationValue.getCancelationReason()).thenReturn(null);
+    when(blankOperationValue.getPaymentData().getOperationValue()).thenReturn(" ");
+
+    PixScheduleDto invalidOperationValue = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+    when(invalidOperationValue.getCancelationReason()).thenReturn(null);
+    when(invalidOperationValue.getPaymentData().getOperationValue()).thenReturn("valor-invalido");
+
+    PixScheduleDto validSchedule1 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+    when(validSchedule1.getCancelationReason()).thenReturn(null);
+    when(validSchedule1.getPaymentData().getOperationValue()).thenReturn("100.50");
+
+    PixScheduleDto validSchedule2 = mock(PixScheduleDto.class, RETURNS_DEEP_STUBS);
+    when(validSchedule2.getCancelationReason()).thenReturn(null);
+    when(validSchedule2.getPaymentData().getOperationValue()).thenReturn("200.25");
+
+    when(response.getSchedules()).thenReturn(Arrays.asList(null, canceledSchedule, withoutPaymentData, nullOperationValue, blankOperationValue, invalidOperationValue, validSchedule1, validSchedule2));
+    when(nextPixScheduleClient.getV3ListSchedulesPaginated(eq(TOKEN), eq(DATE), eq(DATE), isNull(), isNull(), isNull(), isNull(), isNull(), isNull())).thenReturn(response);
+
+    BigDecimal result = fixture.getScheduledAmountForDate(TOKEN, DATE);
+
+    assertEquals(result, new BigDecimal("300.75"));
+}
+
+
+
+
+
+
 package br.com.bradesco.next.pix.payment.service;
 
 import br.com.bradesco.next.client.next.pix.schedule.NextPixScheduleClient;
