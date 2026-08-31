@@ -1,3 +1,36 @@
+package br.com.bradesco.next.pix.payment.domain.dto;
+
+import br.com.bradesco.next.common.web.exception.NextError;
+
+import java.util.Arrays;
+import java.util.Objects;
+
+public record PixPaymentM0076RuleResultDto(NextError error, Object[] params) {
+
+    public static PixPaymentM0076RuleResultDto of(NextError error, Object... params) {
+        return new PixPaymentM0076RuleResultDto(error, params);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (!(obj instanceof PixPaymentM0076RuleResultDto other)) return false;
+        return Objects.equals(error, other.error) && Arrays.deepEquals(params, other.params);
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * Objects.hashCode(error) + Arrays.deepHashCode(params);
+    }
+
+    @Override
+    public String toString() {
+        return "PixPaymentM0076RuleResultDto[error=" + error + ", params=" + Arrays.deepToString(params) + "]";
+    }
+}
+
+
+
 // ==================== PixPaymentConfirmationV3ServiceM0076Test.java ====================
 
 // ADICIONE O IMPORT:
