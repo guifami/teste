@@ -1,3 +1,18 @@
+} catch (FeignCustomException ce) {
+    LOG.error(BSPI_ERROR_CONFIRM_PAYMENT, ce);
+    PixPaymentM0076RuleResult ruleResult = resolveM0076Rule(extractBspiRawCode(ce), pixPaymentDto, getByFeignCustomException(ce), token);
+    NextError nextError = ruleResult.error();
+
+    if (PIX_SECURITY_BLOCK_ERROR.getCode().equals(nextError.getCode())) {
+        return createResponseForAwaitingAnalysisV3(pixPaymentDto);
+    }
+
+    String[] params = ruleResult.params() == null ? new String[0] : java.util.Arrays.stream(ruleResult.params()).map(String::valueOf).toArray(String[]::new);
+    throw new UnprocessableEntityException(nextError.getCode(), nextError, strings, params);
+}
+
+
+
 // ==================== PixPaymentM0076RuleResult.java ====================
 package br.com.bradesco.next.pix.payment.domain.dto;
 
