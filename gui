@@ -1,133 +1,111 @@
-} catch (FeignCustomException ce) {
-    LOG.error(BSPI_ERROR_CONFIRM_PAYMENT, ce);
-    PixPaymentM0076RuleResult ruleResult = resolveM0076Rule(extractBspiRawCode(ce), pixPaymentDto, getByFeignCustomException(ce), token);
-    NextError nextError = ruleResult.error();
+// ==================== PixPaymentConfirmationV3ServiceM0076Test.java ====================
 
-    if (PIX_SECURITY_BLOCK_ERROR.getCode().equals(nextError.getCode())) {
-        return createResponseForAwaitingAnalysisV3(pixPaymentDto);
-    }
-
-    String[] params = ruleResult.params() == null ? new String[0] : java.util.Arrays.stream(ruleResult.params()).map(String::valueOf).toArray(String[]::new);
-    throw new UnprocessableEntityException(nextError.getCode(), nextError, strings, params);
-}
-
-
-
-// ==================== PixPaymentM0076RuleResult.java ====================
-package br.com.bradesco.next.pix.payment.domain.dto;
-
-import br.com.bradesco.next.common.web.exception.NextError;
-
-public record PixPaymentM0076RuleResult(NextError error, Object[] params) {
-    public static PixPaymentM0076RuleResult of(NextError error, Object... params) { return new PixPaymentM0076RuleResult(error, params); }
-}
-
-
-// ==================== PixPaymentM0076RuleResolver.java ====================
-package br.com.bradesco.next.pix.payment.utils;
-
-import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076ContextDto;
-import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076RuleResult;
-
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
-import java.util.Optional;
-
-import static br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError.PIX_PAYMENT_SCHEDULE_DAILY_LIMIT_EXCEEDED_FOR_DATE;
-import static br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError.PIX_PAYMENT_SCHEDULE_NEXT_DAY_NIGHT_LIMIT_EXCEEDED;
-import static br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED;
-import static java.util.Objects.isNull;
-import static java.util.Objects.nonNull;
-
-public final class PixPaymentM0076RuleResolver {
-
-    public static final String BSPI_ERROR_CODE_M0076 = "M0076";
-    private static final BigDecimal SCHEDULE_NEXT_DAY_LIMIT = new BigDecimal("1000");
-    private static final LocalTime NIGHT_WINDOW_START = LocalTime.of(20, 0);
-    private static final LocalTime NIGHT_WINDOW_END = LocalTime.of(23, 59, 59);
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy");
-
-    private PixPaymentM0076RuleResolver() { throw new IllegalStateException("Utility class"); }
-
-    public static boolean isM0076(String bspiReturnCode) { return BSPI_ERROR_CODE_M0076.equals(bspiReturnCode); }
-
-    public static Optional<PixPaymentM0076RuleResult> resolve(PixPaymentM0076ContextDto context) {
-        if (isNull(context)) return Optional.empty();
-
-        boolean differentOwnership = isDifferentOwnership(context.sameOwnership());
-        boolean nextDaySchedule = isNextDay(context.scheduledDate());
-        boolean createdOnNightWindow = isOnNightWindow(context.creationDateTime());
-        BigDecimal amount = ofNullableAmount(context.transactionAmount());
-
-        if (differentOwnership && nextDaySchedule && createdOnNightWindow) {
-            if (amount.compareTo(SCHEDULE_NEXT_DAY_LIMIT) > 0) {
-                String nextAvailableDate = nonNull(context.nextAvailableDate()) ? context.nextAvailableDate().format(DATE_FORMATTER) : "";
-                return Optional.of(PixPaymentM0076RuleResult.of(PIX_PAYMENT_SCHEDULE_NEXT_DAY_NIGHT_LIMIT_EXCEEDED, nextAvailableDate));
-            }
-
-            BigDecimal alreadyScheduledForDate = ofNullableAmount(context.existingScheduledAmountForDate());
-            if (alreadyScheduledForDate.add(amount).compareTo(SCHEDULE_NEXT_DAY_LIMIT) > 0) return Optional.of(PixPaymentM0076RuleResult.of(PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
-        }
-
-        if (Boolean.TRUE.equals(context.isAgendamento())) return Optional.of(PixPaymentM0076RuleResult.of(PIX_PAYMENT_SCHEDULE_DAILY_LIMIT_EXCEEDED_FOR_DATE));
-
-        return Optional.empty();
-    }
-
-    private static BigDecimal ofNullableAmount(BigDecimal amount) { return isNull(amount) ? BigDecimal.ZERO : amount; }
-
-    private static boolean isDifferentOwnership(Boolean sameOwnership) { return !Boolean.TRUE.equals(sameOwnership); }
-
-    private static boolean isNextDay(LocalDate scheduledDate) { return nonNull(scheduledDate) && scheduledDate.isEqual(LocalDate.now().plusDays(1)); }
-
-    private static boolean isOnNightWindow(LocalDateTime creationDateTime) {
-        if (isNull(creationDateTime)) return false;
-        LocalTime time = creationDateTime.toLocalTime();
-        return !time.isBefore(NIGHT_WINDOW_START) && !time.isAfter(NIGHT_WINDOW_END);
-    }
-}
-
-
-// ==================== PixPaymentConfirmationV3Service.java ====================
 // ADICIONE O IMPORT:
 import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076RuleResult;
 
-
-// SUBSTITUA SEU resolveM0076Rule INTEIRO POR ESTE:
-private PixPaymentM0076RuleResult resolveM0076Rule(String bspiReturnCode, PixPaymentDto pixPaymentDto, NextError defaultError, String token) {
-    if (!PixPaymentM0076RuleResolver.isM0076(bspiReturnCode)) return PixPaymentM0076RuleResult.of(defaultError);
-
-    PixPaymentScheduleDto schedule = pixPaymentDto.getSchedule();
-    LocalDate scheduleDate = nonNull(schedule) ? schedule.getScheduleDate() : null;
-    BigDecimal existingScheduledAmount = nonNull(scheduleDate) ? pixScheduleQueryService.getScheduledAmountForDate(token, scheduleDate) : BigDecimal.ZERO;
-
-    var context = new PixPaymentM0076ContextDto(pixPaymentDto.getTransactionAmount(), pixPaymentDto.isSameOwnership(), scheduleDate, LocalDateTime.now(), nonNull(schedule), existingScheduledAmount, nonNull(scheduleDate) ? scheduleDate.plusDays(1) : null);
-
-    return PixPaymentM0076RuleResolver.resolve(context).orElse(PixPaymentM0076RuleResult.of(defaultError));
+// ADICIONE ESTE HELPER DENTRO DA CLASSE DE TESTE:
+@SuppressWarnings({"rawtypes", "unchecked"})
+private Optional mockM0076Result(NextError error, String... params) {
+    return Optional.of(PixPaymentM0076RuleResult.of(error, params));
 }
 
 
-// ==================== ONDE VOCÊ CHAMA resolveM0076Rule ====================
-// SE HOJE ESTIVER ASSIM:
-//
-// NextError nextError = resolveM0076Rule(bspiReturnCode, pixPaymentDto, defaultError, token);
-// throw new UnprocessableEntityException(nextError.getCode(), nextError, strings);
-//
+// ==================== TESTE 1 ====================
+
+@Test
+public void confirmationV3_quandoM0076ComAgendamento_deveConsultarScheduleEEnviarSomatorioAoResolver() {
+    PixPaymentDto pixPaymentDto = getPixPaymentDto();
+    pixPaymentDto.setTransactionAmount(new BigDecimal("600"));
+    pixPaymentDto.setSameOwnership(false);
+    LocalDate scheduleDate = LocalDate.now().plusDays(1);
+    PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+    schedule.setScheduleDate(scheduleDate);
+    pixPaymentDto.setSchedule(schedule);
+
+    FeignCustomException feignException = mockConfirmationException();
+    NextError defaultError = mockDefaultError();
+
+    when(pixScheduleQueryService.getScheduledAmountForDate(OTP_TOKEN, scheduleDate)).thenReturn(new BigDecimal("500"));
+
+    try (MockedStatic<BspiErrorUtils> bspiErrorMock = mockStatic(BspiErrorUtils.class); MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+        bspiErrorMock.when(() -> BspiErrorUtils.extractBspiRawCode(feignException)).thenReturn("M0076");
+        bspiErrorMock.when(() -> BspiErrorUtils.getByFeignCustomException(feignException)).thenReturn(defaultError);
+        resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+        resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any(PixPaymentM0076ContextDto.class))).thenReturn(mockM0076Result(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
+
+        try {
+            fixture.confirmationV3(pixPaymentDto, OTP_TOKEN);
+            fail("Era esperado o lançamento de UnprocessableEntityException");
+        } catch (UnprocessableEntityException expected) {
+            ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+            resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+            PixPaymentM0076ContextDto context = captor.getValue();
+
+            assertEquals(context.transactionAmount(), new BigDecimal("600"));
+            assertFalse(context.sameOwnership());
+            assertEquals(context.scheduledDate(), scheduleDate);
+            assertNotNull(context.creationDateTime());
+            assertTrue(context.isAgendamento());
+            assertEquals(context.existingScheduledAmountForDate(), new BigDecimal("500"));
+            assertEquals(context.nextAvailableScheduleDate(), scheduleDate.plusDays(1));
+            verify(pixScheduleQueryService).getScheduledAmountForDate(OTP_TOKEN, scheduleDate);
+        }
+    }
+}
+
+
+// ==================== TESTE 2 ====================
+
+@Test
+public void confirmationV3_quandoM0076ComAgendamentoSemData_deveUsarZeroENaoConsultarSchedule() {
+    PixPaymentDto pixPaymentDto = getPixPaymentDto();
+    pixPaymentDto.setTransactionAmount(new BigDecimal("400"));
+    pixPaymentDto.setSameOwnership(false);
+    PixPaymentScheduleDto schedule = new PixPaymentScheduleDto();
+    schedule.setScheduleDate(null);
+    pixPaymentDto.setSchedule(schedule);
+
+    FeignCustomException feignException = mockConfirmationException();
+    NextError defaultError = mockDefaultError();
+
+    try (MockedStatic<BspiErrorUtils> bspiErrorMock = mockStatic(BspiErrorUtils.class); MockedStatic<PixPaymentM0076RuleResolver> resolverMock = mockStatic(PixPaymentM0076RuleResolver.class)) {
+        bspiErrorMock.when(() -> BspiErrorUtils.extractBspiRawCode(feignException)).thenReturn("M0076");
+        bspiErrorMock.when(() -> BspiErrorUtils.getByFeignCustomException(feignException)).thenReturn(defaultError);
+        resolverMock.when(() -> PixPaymentM0076RuleResolver.isM0076("M0076")).thenReturn(true);
+        resolverMock.when(() -> PixPaymentM0076RuleResolver.resolve(any(PixPaymentM0076ContextDto.class))).thenReturn(mockM0076Result(PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
+
+        try {
+            fixture.confirmationV3(pixPaymentDto, OTP_TOKEN);
+            fail("Era esperado o lançamento de UnprocessableEntityException");
+        } catch (UnprocessableEntityException expected) {
+            ArgumentCaptor<PixPaymentM0076ContextDto> captor = ArgumentCaptor.forClass(PixPaymentM0076ContextDto.class);
+            resolverMock.verify(() -> PixPaymentM0076RuleResolver.resolve(captor.capture()));
+            PixPaymentM0076ContextDto context = captor.getValue();
+
+            assertEquals(context.transactionAmount(), new BigDecimal("400"));
+            assertFalse(context.sameOwnership());
+            assertNull(context.scheduledDate());
+            assertNotNull(context.creationDateTime());
+            assertTrue(context.isAgendamento());
+            assertEquals(context.existingScheduledAmountForDate(), BigDecimal.ZERO);
+            assertNull(context.nextAvailableScheduleDate());
+            verifyNoInteractions(pixScheduleQueryService);
+        }
+    }
+}
+
+
+// ==================== HttpObjectsRulesTest.java ====================
+// NO TESTE classesMustEndNameInDTO, EXCLUA SOMENTE A NOVA CLASSE.
+// SE ESTIVER ALGO COMO:
+
+classes()
+        .that().resideInAPackage("..domain.dto..")
+        .should().haveSimpleNameEndingWith("Dto");
+
 // TROQUE POR:
 
-PixPaymentM0076RuleResult ruleResult = resolveM0076Rule(bspiReturnCode, pixPaymentDto, defaultError, token);
-NextError nextError = ruleResult.error();
-throw new UnprocessableEntityException(nextError.getCode(), nextError, strings, ruleResult.params());
-
-
-// ==================== Strings.properties ====================
-// MANTENHA O {0}, POIS AGORA ELE RECEBERÁ A DATA:
-
-next.pix.payment.schedule.error.011=<h5>Este valor ultrapassa o limite de R$ 1.000,00 em agendamentos para o dia seguinte<br/></h5>Essa regra do Banco Central vale para Pix agendados para o dia seguinte, entre 20h e 24h, para contas de outra titularidade.<br/>Você pode diminuir o valor, agendar outra data a partir de {0} ou fazer o Pix em outro horário.
-
-next.pix.payment.schedule.error.012=<h5>Este valor ultrapassa seu limite diário para Pix agendados para a data escolhida<br/></h5>Você pode escolher um valor menor ou agendar para outro dia.<br/>Se preferir, também dá para aumentar seu limite de Pix Agendado. Por regra do Banco Central, o aumento leva de 24 a 48 horas para ser concluído.
-
-next.pix.payment.schedule.error.013=<h5>Agendamento noturno maior que o limite de R$ 1.000,00 em agendamentos para o dia seguinte<br/></h5>Essa regra do Banco Central vale para Pix agendados para o dia seguinte, entre 20h e 24h, para contas de outra titularidade.<br/>Você pode diminuir o valor, agendar para outro dia ou fazer o Pix em outro horário.
+classes()
+        .that().resideInAPackage("..domain.dto..")
+        .and().doNotHaveSimpleName("PixPaymentM0076RuleResult")
+        .should().haveSimpleNameEndingWith("Dto");
