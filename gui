@@ -1,4 +1,4 @@
-// PixPaymentM0076RuleResult.java
+// ==================== PixPaymentM0076RuleResult.java ====================
 package br.com.bradesco.next.pix.payment.domain.dto;
 
 import br.com.bradesco.next.common.web.exception.NextError;
@@ -7,17 +7,20 @@ public record PixPaymentM0076RuleResult(NextError error, Object[] params) {
     public static PixPaymentM0076RuleResult of(NextError error, Object... params) { return new PixPaymentM0076RuleResult(error, params); }
 }
 
-// PixPaymentM0076RuleResolver.java
+
+// ==================== PixPaymentM0076RuleResolver.java ====================
 package br.com.bradesco.next.pix.payment.utils;
 
 import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076ContextDto;
 import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076RuleResult;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
+
 import static br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError.PIX_PAYMENT_SCHEDULE_DAILY_LIMIT_EXCEEDED_FOR_DATE;
 import static br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError.PIX_PAYMENT_SCHEDULE_NEXT_DAY_NIGHT_LIMIT_EXCEEDED;
 import static br.com.bradesco.next.pix.payment.domain.enums.PixPaymentError.PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED;
@@ -25,6 +28,7 @@ import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
 
 public final class PixPaymentM0076RuleResolver {
+
     public static final String BSPI_ERROR_CODE_M0076 = "M0076";
     private static final BigDecimal SCHEDULE_NEXT_DAY_LIMIT = new BigDecimal("1000");
     private static final LocalTime NIGHT_WINDOW_START = LocalTime.of(20, 0);
@@ -37,25 +41,33 @@ public final class PixPaymentM0076RuleResolver {
 
     public static Optional<PixPaymentM0076RuleResult> resolve(PixPaymentM0076ContextDto context) {
         if (isNull(context)) return Optional.empty();
+
         boolean differentOwnership = isDifferentOwnership(context.sameOwnership());
         boolean nextDaySchedule = isNextDay(context.scheduledDate());
         boolean createdOnNightWindow = isOnNightWindow(context.creationDateTime());
         BigDecimal amount = ofNullableAmount(context.transactionAmount());
+
         if (differentOwnership && nextDaySchedule && createdOnNightWindow) {
             if (amount.compareTo(SCHEDULE_NEXT_DAY_LIMIT) > 0) {
-                String nextAvailableDate = context.scheduledDate().plusDays(1).format(DATE_FORMATTER);
+                String nextAvailableDate = nonNull(context.nextAvailableDate()) ? context.nextAvailableDate().format(DATE_FORMATTER) : "";
                 return Optional.of(PixPaymentM0076RuleResult.of(PIX_PAYMENT_SCHEDULE_NEXT_DAY_NIGHT_LIMIT_EXCEEDED, nextAvailableDate));
             }
+
             BigDecimal alreadyScheduledForDate = ofNullableAmount(context.existingScheduledAmountForDate());
             if (alreadyScheduledForDate.add(amount).compareTo(SCHEDULE_NEXT_DAY_LIMIT) > 0) return Optional.of(PixPaymentM0076RuleResult.of(PIX_PAYMENT_SCHEDULE_SUM_LIMIT_EXCEEDED));
         }
+
         if (Boolean.TRUE.equals(context.isAgendamento())) return Optional.of(PixPaymentM0076RuleResult.of(PIX_PAYMENT_SCHEDULE_DAILY_LIMIT_EXCEEDED_FOR_DATE));
+
         return Optional.empty();
     }
 
     private static BigDecimal ofNullableAmount(BigDecimal amount) { return isNull(amount) ? BigDecimal.ZERO : amount; }
+
     private static boolean isDifferentOwnership(Boolean sameOwnership) { return !Boolean.TRUE.equals(sameOwnership); }
+
     private static boolean isNextDay(LocalDate scheduledDate) { return nonNull(scheduledDate) && scheduledDate.isEqual(LocalDate.now().plusDays(1)); }
+
     private static boolean isOnNightWindow(LocalDateTime creationDateTime) {
         if (isNull(creationDateTime)) return false;
         LocalTime time = creationDateTime.toLocalTime();
@@ -63,15 +75,44 @@ public final class PixPaymentM0076RuleResolver {
     }
 }
 
-// NO PONTO EM QUE VOCÊ CHAMA O RESOLVER, troque o Optional<NextError> pelo resultado abaixo:
-Optional<PixPaymentM0076RuleResult> result = PixPaymentM0076RuleResolver.resolve(context);
-if (result.isPresent()) {
-    PixPaymentM0076RuleResult ruleResult = result.get();
-    throw new PixCustomException(ruleResult.error(), ruleResult.params());
+
+// ==================== PixPaymentConfirmationV3Service.java ====================
+// ADICIONE O IMPORT:
+import br.com.bradesco.next.pix.payment.domain.dto.PixPaymentM0076RuleResult;
+
+
+// SUBSTITUA SEU resolveM0076Rule INTEIRO POR ESTE:
+private PixPaymentM0076RuleResult resolveM0076Rule(String bspiReturnCode, PixPaymentDto pixPaymentDto, NextError defaultError, String token) {
+    if (!PixPaymentM0076RuleResolver.isM0076(bspiReturnCode)) return PixPaymentM0076RuleResult.of(defaultError);
+
+    PixPaymentScheduleDto schedule = pixPaymentDto.getSchedule();
+    LocalDate scheduleDate = nonNull(schedule) ? schedule.getScheduleDate() : null;
+    BigDecimal existingScheduledAmount = nonNull(scheduleDate) ? pixScheduleQueryService.getScheduledAmountForDate(token, scheduleDate) : BigDecimal.ZERO;
+
+    var context = new PixPaymentM0076ContextDto(pixPaymentDto.getTransactionAmount(), pixPaymentDto.isSameOwnership(), scheduleDate, LocalDateTime.now(), nonNull(schedule), existingScheduledAmount, nonNull(scheduleDate) ? scheduleDate.plusDays(1) : null);
+
+    return PixPaymentM0076RuleResolver.resolve(context).orElse(PixPaymentM0076RuleResult.of(defaultError));
 }
 
-// NO SEU HANDLER/LOCAL QUE RESOLVE O Strings.properties, precisa passar os params:
-String message = messageSource.getMessage(error.getMessageKey(), params, locale);
 
-// Strings.properties continua assim:
+// ==================== ONDE VOCÊ CHAMA resolveM0076Rule ====================
+// SE HOJE ESTIVER ASSIM:
+//
+// NextError nextError = resolveM0076Rule(bspiReturnCode, pixPaymentDto, defaultError, token);
+// throw new UnprocessableEntityException(nextError.getCode(), nextError, strings);
+//
+// TROQUE POR:
+
+PixPaymentM0076RuleResult ruleResult = resolveM0076Rule(bspiReturnCode, pixPaymentDto, defaultError, token);
+NextError nextError = ruleResult.error();
+throw new UnprocessableEntityException(nextError.getCode(), nextError, strings, ruleResult.params());
+
+
+// ==================== Strings.properties ====================
+// MANTENHA O {0}, POIS AGORA ELE RECEBERÁ A DATA:
+
 next.pix.payment.schedule.error.011=<h5>Este valor ultrapassa o limite de R$ 1.000,00 em agendamentos para o dia seguinte<br/></h5>Essa regra do Banco Central vale para Pix agendados para o dia seguinte, entre 20h e 24h, para contas de outra titularidade.<br/>Você pode diminuir o valor, agendar outra data a partir de {0} ou fazer o Pix em outro horário.
+
+next.pix.payment.schedule.error.012=<h5>Este valor ultrapassa seu limite diário para Pix agendados para a data escolhida<br/></h5>Você pode escolher um valor menor ou agendar para outro dia.<br/>Se preferir, também dá para aumentar seu limite de Pix Agendado. Por regra do Banco Central, o aumento leva de 24 a 48 horas para ser concluído.
+
+next.pix.payment.schedule.error.013=<h5>Agendamento noturno maior que o limite de R$ 1.000,00 em agendamentos para o dia seguinte<br/></h5>Essa regra do Banco Central vale para Pix agendados para o dia seguinte, entre 20h e 24h, para contas de outra titularidade.<br/>Você pode diminuir o valor, agendar para outro dia ou fazer o Pix em outro horário.
