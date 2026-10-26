@@ -1,3 +1,44 @@
+Realizar regressão de Limites Pix (next-pix / next-pix-payment)
+→ O que será testado: majoração de limites, limite zero e tratamento das exceções M0076 e M0261.
+→ Critério de sucesso: limites aplicados corretamente e mensagens compatíveis com cada cenário, sem regressão nas transações permitidas.
+→ Evidências: prints dos fluxos, logs e relatórios de teste.
+→ Responsável: Negócio e Tecnologia.
+
+Validar bloqueios e ajustes de Pix Automático (next-pix-automatic-payment)
+→ O que será testado: bloqueios Safer, tratamento CAFD e extração do campo E2E.
+→ Critério de sucesso: bloqueios aplicados nos cenários previstos, tratamento correto dos retornos e E2E correspondente à transação.
+→ Evidências: prints das tentativas, logs e registros das transações.
+→ Responsável: Negócio e Tecnologia.
+
+Validar boleto híbrido e pagamento único (next-pix-payment)
+→ O que será testado: tentativa de pagamento via Pix de boleto já quitado por código de barras e tratamento do código BDU03.
+→ Critério de sucesso: pagamento duplicado impedido e retorno apresentado corretamente ao usuário.
+→ Evidências: prints dos fluxos, registros de pagamento e logs.
+→ Responsável: Negócio e Tecnologia.
+
+Validar bloqueio de BETs irregulares (next-transfer)
+→ O que será testado: transferências TED/TEF para destinatários sujeitos ao bloqueio.
+→ Critério de sucesso: transferências bloqueadas conforme as regras previstas, sem impacto nas transferências permitidas.
+→ Evidências: prints das tentativas e logs das transações.
+→ Responsável: Negócio e Tecnologia.
+
+Validar notificações de agendamentos Pix (next-pix / next-template / next-notification)
+→ O que será testado: geração dos eventos, montagem dos templates e envio das notificações de agendamento, incluindo o ajuste do nome do evento 39.
+→ Critério de sucesso: notificações entregues com conteúdo correto e eventos processados sem conflitos.
+→ Evidências: prints das notificações e logs de geração e envio.
+→ Responsável: Negócio e Tecnologia.
+
+Acompanhar dashboards do Dynatrace dos microsserviços implantados
+→ O que será monitorado: disponibilidade, tempo de resposta, volume de erros e comportamento das integrações durante e após a implantação.
+→ Critério de sucesso: ausência de degradação de performance ou aumento de erros em relação ao período anterior à implantação.
+→ Evidências: dashboards e relatórios extraídos do Dynatrace.
+→ Responsável: Tecnologia.
+
+
+
+
+
+
 
 Adequação aos requisitos regulatórios de limites e notificações Pix, prevenção de pagamentos duplicados de boletos híbridos, bloqueio de TED/TEF para BETs irregulares e reforço da segurança do Pix Automático com a Safer, reduzindo riscos operacionais e melhorando a experiência dos clientes.
 
